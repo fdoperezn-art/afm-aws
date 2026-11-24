@@ -2,7 +2,7 @@ import {
   createElement, Trash2, Construction, Lightbulb, Trees, Droplets, TrafficCone, Armchair, Volleyball, ShieldCheck,
   Building2, BusFront, CircleAlert, ArrowUpRight, ArrowRight, ArrowLeft, Plus, X, Menu, MapPin, Map, Filter, Search,
   Locate, FileText, Info, User, Camera, Check, ChevronRight, ChevronDown, Download, Lock, Heart, Clock, Layers, Mail,
-  HardHat, LogOut, RefreshCw, Flag, Eye,
+  HardHat, LogOut, RefreshCw, Flag, Eye, Instagram,
 } from 'lucide';
 
 const ICONS = {
@@ -13,7 +13,7 @@ const ICONS = {
   filter: Filter, search: Search, locate: Locate, reports: FileText, info: Info, user: User, camera: Camera,
   check: Check, 'chevron-right': ChevronRight, 'chevron-down': ChevronDown, download: Download, lock: Lock,
   heart: Heart, clock: Clock, layers: Layers, mail: Mail, 'hard-hat': HardHat, 'log-out': LogOut,
-  refresh: RefreshCw, flag: Flag, eye: Eye,
+  refresh: RefreshCw, flag: Flag, eye: Eye, instagram: Instagram,
 };
 
 /** Devuelve el SVG de un ícono como texto HTML. */

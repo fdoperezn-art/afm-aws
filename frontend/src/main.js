@@ -20,6 +20,7 @@ import { icon, roadSign } from './lib/icons.js';
 import * as mine from './lib/my-reports.js';
 import { reducePhoto } from './lib/photos.js';
 
+const INSTAGRAM_URL = 'https://www.instagram.com/afmconchali/';
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
@@ -82,7 +83,7 @@ $('#app').innerHTML = `
     </section>
     <section id="reports-view" class="page-view" hidden></section>
   </main>
-  <footer class="footer"><div>${brand()}<span class="footer-place">CONCHALÍ<br><small>NUESTRA COMUNA, NUESTRA VOZ</small></span></div><p>Una herramienta ciudadana para mirar nuestro barrio.<br><span>Herramienta ciudadana independiente. Sin envío a la municipalidad.</span></p><button class="text-button" data-info="privacy">Términos y privacidad ${icon('arrow-up-right', 15)}</button></footer>
+  <footer class="footer"><div>${brand()}<span class="footer-place">CONCHALÍ<br><small>NUESTRA COMUNA, NUESTRA VOZ</small></span><a class="footer-social" href="${INSTAGRAM_URL}" target="_blank" rel="noopener noreferrer" aria-label="AFM Conchalí en Instagram (se abre en una pestaña nueva)" title="Síguenos en Instagram">${icon('instagram', 26)}</a></div><p>Una herramienta ciudadana para mirar nuestro barrio.<br><span>Herramienta ciudadana independiente. Sin envío a la municipalidad.</span></p><button class="text-button" data-info="privacy">Términos y privacidad ${icon('arrow-up-right', 15)}</button></footer>
   <nav class="bottom-nav" aria-label="Navegación móvil"><button class="active" data-nav="map">${icon('map', 21)}Mapa</button><button data-nav="reports">${icon('reports', 21)}Mis reportes</button><button data-info="about">${icon('info', 21)}Información</button><button data-info="profile">${icon('user', 21)}Perfil</button></nav>
   <dialog id="dialog" aria-labelledby="dialog-title"></dialog>`;
 

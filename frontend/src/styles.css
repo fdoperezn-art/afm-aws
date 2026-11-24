@@ -4798,3 +4798,24 @@ dialog::backdrop {
   gap: 14px;
   align-items: center;
 }
+
+/* Redes sociales en el pie de página */
+.footer-social {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px; /* área táctil cómoda */
+  height: 44px;
+  border-radius: 10px;
+  color: var(--orange);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.footer-social:hover,
+.footer-social:focus-visible {
+  background: var(--orange-light, rgba(253, 106, 2, 0.12));
+  transform: translateY(-1px);
+}
+.footer-social:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+}
