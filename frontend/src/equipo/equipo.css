@@ -68,3 +68,10 @@
 #address-results button:focus-visible {
   border-color: var(--orange);
 }
+/* 16 px evita el zoom automático del iPhone al tocar un campo */
+.team-form input,
+.team-form textarea,
+.team-form select,
+#team-code {
+  font-size: 16px;
+}

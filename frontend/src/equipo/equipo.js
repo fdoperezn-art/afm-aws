@@ -19,7 +19,6 @@ const app = $('#app');
 let map;
 let marker;
 let draft;
-let lookupTimer;
 
 const readCode = () => {
   try {
@@ -74,7 +73,7 @@ const field = (id, label, { type = 'text', max, required = true, placeholder = '
   `<div><label class="field-label" for="${id}">${label} ${required ? '<span class="required">*</span>' : '<span>(opcional)</span>'}</label><input class="dark-input" id="${id}" data-field="${id}" type="${type}" ${max ? `maxlength="${max}"` : ''} placeholder="${placeholder}" autocomplete="${autocomplete}" value="${esc(draft[id])}" ${extra}></div>`;
 
 function emptyDraft() {
-  return { firstName: '', lastNames: '', phone: '', address: '', role: '', commitment: '', visitDate: todayISO(), registeredBy: draft?.registeredBy || '', location: null, addressEdited: false };
+  return { firstName: '', lastNames: '', phone: '', address: '', role: '', commitment: '', visitDate: todayISO(), registeredBy: draft?.registeredBy || '', location: null };
 }
 
 function renderForm() {
@@ -84,12 +83,11 @@ function renderForm() {
       <fieldset><legend>Persona con quien se reunieron</legend>
         <div class="field-row">${field('firstName', 'Nombre', { max: VISIT_LIMITS.firstName })}${field('lastNames', 'Apellidos', { max: VISIT_LIMITS.lastNames })}</div>
         <div class="field-row">${field('phone', 'Teléfono', { type: 'tel', max: 16, placeholder: '9 1234 5678', extra: 'inputmode="tel"' })}${field('role', 'Cargo', { max: VISIT_LIMITS.role, placeholder: 'Ej. Presidenta junta de vecinos' })}</div>
-        ${field('address', 'Dirección', { max: VISIT_LIMITS.address, placeholder: 'Escríbela o márcala en el mapa' })}
-        <p class="field-help" id="address-status">Puedes escribirla a mano, buscarla o tocar el mapa.</p>
-        <div id="address-search" class="address-search" role="search"><label class="sr-only" for="address-query">Buscar dirección en Conchalí</label>${icon('search', 19)}<input id="address-query" placeholder="Buscar dirección en Conchalí" autocomplete="off"><button type="button" aria-label="Buscar dirección">${icon('arrow-right', 20)}</button></div>
-        <p id="search-status" class="search-status" role="status"></p><div id="address-results"></div>
+        <label class="field-label" for="address">Dirección <span class="required">*</span></label>
+        <div class="address-search"><input id="address" data-field="address" maxlength="${VISIT_LIMITS.address}" placeholder="Ej. Pedro Fontova 6000" autocomplete="off" enterkeyhint="search" value="${esc(draft.address)}"><button type="button" id="locate-address" aria-label="Ubicar la dirección en el mapa" title="Ubicar en el mapa">${icon('map-pin', 20)}</button></div>
+        <p class="field-help" id="address-status" role="status">Escríbela o toca el mapa: la dirección y el punto se actualizan entre sí.</p>
         <div class="team-map-wrap"><div id="visit-map" aria-label="Ubicación en el mapa"></div></div>
-        <p class="field-help" id="point-status">${draft.location ? 'Punto marcado.' : 'Sin punto marcado.'} <button type="button" class="text-button" id="clear-point" ${draft.location ? '' : 'hidden'}>Quitar punto</button> <button type="button" class="text-button" id="use-map-address" hidden>Usar la dirección del mapa</button></p>
+        <p class="field-help" id="point-status">${draft.location ? 'Punto marcado.' : 'Sin punto marcado.'} <button type="button" class="text-button" id="clear-point" ${draft.location ? '' : 'hidden'}>Quitar punto</button></p>
       </fieldset>
       <fieldset><legend>La visita</legend>
         <div class="field-row">${field('visitDate', 'Fecha de visita', { type: 'date', extra: `max="${todayISO()}" min="2020-01-01"` })}${field('registeredBy', 'Registrado por', { required: false, max: VISIT_LIMITS.registeredBy, placeholder: 'Tu nombre' })}</div>
@@ -111,20 +109,32 @@ function renderForm() {
     el.oninput = () => {
       draft[el.dataset.field] = el.value;
       if (el.id === 'commitment') $('#commit-count').textContent = el.value.length;
-      if (el.id === 'address') {
-        draft.addressEdited = el.value.trim() !== '';
-        $('#address-status').textContent = draft.addressEdited
-          ? 'Dirección escrita a mano. El punto del mapa no la cambiará.'
-          : 'Puedes escribirla a mano, buscarla o tocar el mapa.';
-      }
     };
   });
+  // Dirección → mapa: al terminar de escribir (salir del campo, Enter o el botón).
+  // No se busca letra por letra: las condiciones de uso de Nominatim prohíben el autocompletado.
+  const address = $('#address');
+  address.onblur = () => geocodeTyped();
+  address.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault(); // no enviar el formulario
+      geocodeTyped();
+    }
+  };
+  $('#locate-address').onclick = () => geocodeTyped(true);
   initMap();
   $('#visit-form').onsubmit = submit;
 }
 
-function setPoint(lat, lng, knownAddress = null) {
-  if (!isInsideConchali(lat, lng)) return showError(OUTSIDE_MESSAGE);
+// ---------- Dirección ↔ mapa, sincronizados ----------
+// `syncedText` = el texto que ya corresponde al punto actual (evita buscar de nuevo lo mismo).
+// `syncSeq` = número de la última acción: una respuesta tardía no pisa un cambio más reciente.
+let syncedText = '';
+let syncSeq = 0;
+const setStatus = (text) => ($('#address-status').textContent = text);
+
+/** Pone o mueve el marcador, sin tocar la dirección. */
+function placeMarker(lat, lng) {
   draft.location = { lat, lng };
   if (marker) marker.setLatLng([lat, lng]);
   else
@@ -135,10 +145,8 @@ function setPoint(lat, lng, knownAddress = null) {
       .addTo(map)
       .on('dragend', (e) => {
         const p = e.target.getLatLng();
-        if (isInsideConchali(p.lat, p.lng)) {
-          draft.location = { lat: p.lat, lng: p.lng };
-          lookupAddress(p.lat, p.lng);
-        } else {
+        if (isInsideConchali(p.lat, p.lng)) pointChanged(p.lat, p.lng);
+        else {
           e.target.setLatLng([draft.location.lat, draft.location.lng]);
           showError(OUTSIDE_MESSAGE);
         }
@@ -146,85 +154,65 @@ function setPoint(lat, lng, knownAddress = null) {
   $('#point-status').firstChild.textContent = 'Punto marcado. ';
   $('#clear-point').hidden = false;
   $('#visit-error').hidden = true;
-  if (knownAddress) applyMapAddress(knownAddress);
-  else lookupAddress(lat, lng);
 }
 
-/** Pone la dirección del mapa en el campo, salvo que se haya escrito a mano. */
-function applyMapAddress(text, force = false) {
-  draft.mapAddress = text;
-  if (draft.addressEdited && !force) {
-    $('#use-map-address').hidden = !text || text === draft.address;
-    return;
-  }
-  draft.address = text;
-  draft.addressEdited = false;
-  $('#address').value = text;
-  $('#use-map-address').hidden = true;
-  $('#address-status').textContent = 'Dirección tomada del mapa. Revísala y corrígela si es necesario.';
+function removeMarker() {
+  draft.location = null;
+  marker?.remove();
+  marker = null;
+  $('#point-status').firstChild.textContent = 'Sin punto marcado. ';
+  $('#clear-point').hidden = true;
 }
 
-function lookupAddress(lat, lng) {
-  clearTimeout(lookupTimer);
-  const point = draft.location;
-  $('#address-status').textContent = 'Buscando la dirección del punto…';
-  lookupTimer = setTimeout(async () => {
-    try {
-      const parts = partsFromNominatim(await reverseGeocode(lat, lng));
-      if (draft.location !== point) return;
-      const text = parts.street ? formatAddress(parts) : '';
-      if (text) applyMapAddress(text);
-      else $('#address-status').textContent = 'No encontramos la dirección de ese punto. Escríbela a mano.';
-    } catch {
-      if (draft.location === point) $('#address-status').textContent = 'No se pudo obtener la dirección. Escríbela a mano.';
-    }
-  }, 500);
-}
-
-async function onAddressSearch(e) {
-  e.preventDefault();
-  const query = $('#address-query').value.trim();
-  const status = $('#search-status');
-  const results = $('#address-results');
-  const button = $('#address-search button');
-  if (query.length < 3) {
-    status.textContent = 'Escribe al menos 3 caracteres para buscar.';
-    return;
-  }
-  if (button.disabled) return;
-  button.disabled = true;
-  status.textContent = 'Buscando en Conchalí…';
-  results.innerHTML = '';
+/** Mapa → dirección: se tocó el mapa o se arrastró el punto. */
+async function pointChanged(lat, lng) {
+  if (!isInsideConchali(lat, lng)) return showError(OUTSIDE_MESSAGE);
+  placeMarker(lat, lng);
+  const seq = ++syncSeq;
+  setStatus('Buscando la dirección del punto…');
   try {
-    const found = await searchAddress(query);
-    status.textContent = found.length ? 'Selecciona una dirección:' : 'No la encontramos. Márcala en el mapa o escríbela a mano.';
-    results.innerHTML = found
-      .map((r, i) => `<button type="button" data-address="${i}">${icon('map-pin', 15)}${esc(formatAddress(partsFromNominatim(r)))}</button>`)
-      .join('');
-    results.querySelectorAll('[data-address]').forEach(
-      (b) =>
-        (b.onclick = () => {
-          const r = found[Number(b.dataset.address)];
-          const lat = Number(r.lat);
-          const lng = Number(r.lon);
-          if (!isInsideConchali(lat, lng)) return showError(OUTSIDE_MESSAGE);
-          draft.addressEdited = false; // eligió una dirección: se usa la del resultado
-          setPoint(lat, lng, formatAddress(partsFromNominatim(r)));
-          map.setView([lat, lng], 17);
-          results.innerHTML = '';
-          status.textContent = 'Dirección seleccionada. Puedes ajustar el punto en el mapa.';
-        }),
-    );
+    const parts = partsFromNominatim(await reverseGeocode(lat, lng));
+    if (seq !== syncSeq) return;
+    const text = parts.street ? formatAddress(parts) : '';
+    if (!text) return setStatus('No encontramos una dirección para ese punto. Escríbela a mano; el punto se mantiene.');
+    draft.address = text;
+    syncedText = text;
+    $('#address').value = text;
+    setStatus('Dirección actualizada desde el mapa. Puedes corregirla a mano.');
   } catch {
-    status.textContent = 'La búsqueda no está disponible. Marca el punto en el mapa o escribe la dirección.';
-  } finally {
-    button.disabled = false;
+    if (seq === syncSeq) setStatus('No se pudo obtener la dirección. Escríbela a mano; el punto se mantiene.');
+  }
+}
+
+/** Dirección → mapa: se terminó de escribir. `force` = botón «Ubicar en el mapa». */
+async function geocodeTyped(force = false) {
+  const text = $('#address').value.trim();
+  if (!text || (!force && text === syncedText)) return;
+  if (text.length < 4) return setStatus('Escribe la calle y el número para ubicarla en el mapa.');
+  const seq = ++syncSeq;
+  setStatus('Ubicando la dirección en el mapa…');
+  try {
+    const found = (await searchAddress(text)).find((r) => isInsideConchali(Number(r.lat), Number(r.lon)));
+    if (seq !== syncSeq) return;
+    syncedText = text;
+    if (!found) {
+      removeMarker();
+      return setStatus('No encontramos esa dirección en Conchalí. Revisa cómo está escrita o toca el mapa para marcar el punto.');
+    }
+    const lat = Number(found.lat);
+    const lng = Number(found.lon);
+    placeMarker(lat, lng);
+    map.setView([lat, lng], 17);
+    setStatus('Ubicada en el mapa. Si el punto no es exacto, muévelo y la dirección se actualizará.');
+  } catch {
+    if (seq === syncSeq) setStatus('No se pudo ubicar la dirección ahora. Puedes tocar el mapa para marcar el punto.');
   }
 }
 
 function initMap() {
   if (map) map.remove();
   marker = null;
+  syncedText = draft.address || '';
   map = L.map('visit-map', { scrollWheelZoom: false, zoomSnap: 0.25 }).setView(CENTER, 14);
   map.fitBounds(BOUNDS, { padding: [10, 10] });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -232,20 +220,12 @@ function initMap() {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
   }).addTo(map);
   L.geoJSON(BOUNDARY, { style: { color: '#fd6a02', weight: 2.5, fillOpacity: 0.03 }, interactive: false }).addTo(map);
-  if (draft.location) setPoint(draft.location.lat, draft.location.lng);
-  map.on('click', (e) => setPoint(e.latlng.lat, e.latlng.lng));
+  if (draft.location) placeMarker(draft.location.lat, draft.location.lng); // al volver al formulario no se re-busca
+  map.on('click', (e) => pointChanged(e.latlng.lat, e.latlng.lng));
   $('#clear-point').onclick = () => {
-    draft.location = null;
-    marker?.remove();
-    marker = null;
-    $('#point-status').firstChild.textContent = 'Sin punto marcado. ';
-    $('#clear-point').hidden = true;
-    $('#use-map-address').hidden = true;
-  };
-  $('#use-map-address').onclick = () => applyMapAddress(draft.mapAddress, true);
-  $('#address-search button').onclick = onAddressSearch;
-  $('#address-query').onkeydown = (e) => {
-    if (e.key === 'Enter') onAddressSearch(e);
+    syncSeq++;
+    removeMarker();
+    setStatus('Punto quitado. La dirección escrita se mantiene.');
   };
   setTimeout(() => map?.invalidateSize(), 60);
 }
