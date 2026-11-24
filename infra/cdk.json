@@ -1,0 +1,8 @@
+{
+  "app": "npx tsx bin/afm.ts",
+  "watch": { "include": ["bin", "lib", "lambda", "../shared"] },
+  "context": {
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true
+  }
+}
