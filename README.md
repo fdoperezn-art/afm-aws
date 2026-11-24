@@ -4,7 +4,7 @@ Mapa ciudadano de Conchalí (antes un piloto en Netlify que guardaba todo en el 
 ahora con backend real en AWS, Región **us-east-2**.
 
 ```
-Vecinos ──► Amplify Hosting (Vite: mapa + asistente)       Moderadores ──► /admin/ (Cognito + MFA)
+Vecinos ──► Amplify Hosting (Vite: mapa + asistente)       Moderadores ──► /admin/ (Cognito)    
                 │                                                              │ token JWT
                 ▼                                                              ▼
            API Gateway (REST, throttling) ──────────────► Lambda (Node.js 24, ARM)
@@ -21,7 +21,7 @@ Vecinos ──► Amplify Hosting (Vite: mapa + asistente)       Moderadores ─
 | Lógica | Lambda `ApiFunction` (`infra/lambda/api/index.mjs`) | Valida con las mismas reglas que el navegador (`shared/`) |
 | Datos | DynamoDB (on-demand, PITR, protección contra borrado) | Reportes y avisos de contenido |
 | Fotos | S3 privado, cifrado, solo HTTPS | `uploads/` expira en 24 h; las fotos válidas pasan a `reports/<id>/` |
-| Acceso | Cognito User Pool `afm-moderadores`, grupo `moderadores` | Sin registro abierto, MFA TOTP obligatorio |
+| Acceso | Cognito User Pool `afm-moderadores`, grupo `moderadores` | Sin registro abierto, ingreso con correo y contraseña (MFA desactivado) |
 
 ## Rutas de la API
 
@@ -73,7 +73,7 @@ Mientras esa variable no exista, el flujo no hace nada.
 ## Crear un moderador
 
 Cognito le envía un correo con una contraseña temporal. En el primer ingreso a `/admin/`
-deberá crear su contraseña y activar la verificación en dos pasos (app de autenticación).
+deberá crear su contraseña.
 
 ```bash
 aws cognito-idp admin-create-user --region us-east-2 --user-pool-id <UserPoolId> \

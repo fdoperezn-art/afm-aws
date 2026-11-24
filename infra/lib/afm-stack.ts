@@ -89,8 +89,9 @@ export class AfmStack extends Stack {
       signInAliases: { email: true },
       autoVerify: { email: true },
       standardAttributes: { email: { required: true, mutable: true } },
-      mfa: cognito.Mfa.REQUIRED,
-      mfaSecondFactor: { otp: true, sms: false },
+      // Ingreso solo con correo y contraseña (decisión del equipo). Para reactivar la verificación
+      // en dos pasos: mfa: cognito.Mfa.REQUIRED, mfaSecondFactor: { otp: true, sms: false }.
+      mfa: cognito.Mfa.OFF,
       passwordPolicy: {
         minLength: 12,
         requireLowercase: true,
@@ -102,7 +103,7 @@ export class AfmStack extends Stack {
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       userInvitation: {
         emailSubject: 'Tu acceso al panel de moderación de AFM',
-        emailBody: `Hola. Te dieron acceso al panel de moderación de AFM (${siteOrigin}/admin/).<br>Usuario: {username}<br>Contraseña temporal: {####}<br>Al entrar deberás crear una contraseña nueva y activar la verificación en dos pasos.`,
+        emailBody: `Hola. Te dieron acceso al panel de moderación de AFM (${siteOrigin}/admin/).<br>Usuario: {username}<br>Contraseña temporal: {####}<br>Al entrar deberás crear una contraseña nueva.`,
       },
       removalPolicy: RemovalPolicy.RETAIN,
     });
