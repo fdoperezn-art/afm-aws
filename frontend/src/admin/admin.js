@@ -22,7 +22,7 @@ Amplify.configure({
   },
 });
 
-let tab = 'tickets';
+let tab = 'resumen';
 let tickets = [];
 let flags = [];
 let filterText = '';
@@ -162,7 +162,7 @@ function renderDashboard() {
   const reportCount = tickets.reduce((n, t) => n + t.reportCount, 0);
   const suggested = tickets.filter((t) => t.suggestions.length).length;
   shell(`<div class="section-title"><div><span class="eyebrow muted">EQUIPO AFM</span><h1>Moderación<span class="orange-text">.</span></h1><p class="muted">${tickets.length} tickets · ${reportCount} reportes de vecinos${suggested ? ` · <strong class="orange-text">${suggested} con posibles duplicados</strong>` : ''}</p></div></div>
-    <div class="admin-tabs" role="tablist"><button role="tab" data-tab="tickets" aria-selected="${tab === 'tickets'}">${icon('reports', 16)} Tickets <span>${tickets.length}</span></button><button role="tab" data-tab="flags" aria-selected="${tab === 'flags'}">${icon('flag', 16)} Avisos abiertos <span>${openFlags.length}</span></button><button role="tab" data-tab="history" aria-selected="${tab === 'history'}">${icon('check', 16)} Avisos resueltos <span>${flags.length - openFlags.length}</span></button></div>
+    <div class="admin-tabs" role="tablist"><button role="tab" data-tab="resumen" aria-selected="${tab === 'resumen'}">${icon('layers', 16)} Resumen</button><button role="tab" data-tab="tickets" aria-selected="${tab === 'tickets'}">${icon('reports', 16)} Tickets <span>${tickets.length}</span></button><button role="tab" data-tab="flags" aria-selected="${tab === 'flags'}">${icon('flag', 16)} Avisos abiertos <span>${openFlags.length}</span></button><button role="tab" data-tab="history" aria-selected="${tab === 'history'}">${icon('check', 16)} Avisos resueltos <span>${flags.length - openFlags.length}</span></button></div>
     ${tab === 'tickets' ? `<label class="search-field admin-search">${icon('search', 18)}<input id="ticket-filter" placeholder="Buscar por ticket (T-0042), calle o problema" value="${esc(filterText)}"></label>` : ''}
     <div id="admin-content"></div>`);
   $('#admin-actions').innerHTML = `<button class="button orange small" id="export-excel">${icon('download', 16)} Descargar Excel</button><button class="button outline small" id="reload">${icon('refresh', 16)} Actualizar</button><button class="button black small" id="logout">${icon('log-out', 16)} Salir</button>`;
@@ -199,8 +199,20 @@ function renderDashboard() {
     };
 }
 
-function renderContent() {
+async function renderContent() {
   const content = $('#admin-content');
+  if (tab === 'resumen') {
+    content.innerHTML = '<p class="muted admin-loading">Cargando resumen…</p>';
+    const { renderDashboard: renderSummary } = await import('./dashboard.js');
+    renderSummary(content, { tickets, flags }, {
+      onOpenTicket: (id) => {
+        tab = 'tickets';
+        filterText = id;
+        renderDashboard();
+      },
+    });
+    return;
+  }
   if (tab === 'tickets') {
     const list = tickets.filter(matchesFilter);
     content.innerHTML = list.length
