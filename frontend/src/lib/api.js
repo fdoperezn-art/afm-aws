@@ -27,7 +27,8 @@ export async function request(path, { method = 'GET', body, token, headers = {} 
 }
 
 // --- Rutas públicas ---
-export const listReports = () => request('/reports').then((d) => d.reports);
+/** Casos públicos: cada uno agrupa los reportes de uno o más vecinos sobre el mismo problema. */
+export const listReports = () => request('/reports').then((d) => d.cases);
 
 /** Sube una foto directo a S3 con una URL firmada y devuelve su clave temporal. */
 export async function uploadPhoto(file) {
@@ -53,9 +54,13 @@ export const flagReport = (id, flag) =>
 
 // --- Rutas de moderación (requieren sesión de Cognito) ---
 export const admin = {
-  reports: (token) => request('/admin/reports', { token }).then((d) => d.reports),
+  tickets: (token) => request('/admin/tickets', { token }).then((d) => d.tickets),
   flags: (token) => request('/admin/flags', { token }).then((d) => d.flags),
   deleteReport: (token, id) => request(`/admin/reports/${encodeURIComponent(id)}`, { method: 'DELETE', token }),
+  detachReport: (token, id) =>
+    request(`/admin/reports/${encodeURIComponent(id)}/detach`, { method: 'POST', token }),
+  mergeTicket: (token, from, into) =>
+    request(`/admin/tickets/${encodeURIComponent(from)}/merge`, { method: 'POST', token, body: { into } }),
   resolveFlag: (token, reportId, flagId) =>
     request(`/admin/reports/${encodeURIComponent(reportId)}/flags/${encodeURIComponent(flagId)}`, {
       method: 'PATCH',

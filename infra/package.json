@@ -23,6 +23,7 @@
     "@aws-sdk/s3-presigned-post": "3.1165.0",
     "@aws-sdk/s3-request-presigner": "3.1165.0",
     "aws-cdk-lib": "2.275.0",
-    "constructs": "10.8.1"
+    "constructs": "10.8.1",
+    "jpeg-js": "0.4.4"
   }
 }

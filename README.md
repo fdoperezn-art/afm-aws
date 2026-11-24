@@ -19,20 +19,43 @@ Vecinos ──► Amplify Hosting (Vite: mapa + asistente)       Moderadores ─
 | Frontend | Amplify Hosting (despliegue manual de `frontend/dist`) | Cabeceras de seguridad (CSP, HSTS, X-Frame-Options) |
 | API | API Gateway REST `afm-api`, etapa `prod` | Límites anti-spam en las rutas públicas que escriben |
 | Lógica | Lambda `ApiFunction` (`infra/lambda/api/index.mjs`) | Valida con las mismas reglas que el navegador (`shared/`) |
-| Datos | DynamoDB (on-demand, PITR, protección contra borrado) | Reportes y avisos de contenido |
+| Datos | DynamoDB (on-demand, PITR, protección contra borrado) | Reportes, tickets y avisos de contenido |
 | Fotos | S3 privado, cifrado, solo HTTPS | `uploads/` expira en 24 h; las fotos válidas pasan a `reports/<id>/` |
 | Acceso | Cognito User Pool `afm-moderadores`, grupo `moderadores` | Sin registro abierto, ingreso con correo y contraseña (MFA desactivado) |
+
+## Tickets y duplicados
+
+Cada reporte de un vecino se guarda completo (con sus datos de contacto) y queda asignado a un **ticket**
+interno (`T-0001`, `T-0002`, …). Un ticket es un caso: en el mapa público se ve un solo punto con
+«N vecinos lo reportaron». El número de ticket solo lo ve el equipo de moderación.
+
+| Situación | Qué pasa |
+|---|---|
+| Misma foto exacta (huella SHA-256 igual) | Se une automáticamente al ticket existente |
+| Misma foto reenviada/recomprimida (huella perceptual dHash a ≤ 8 bits) y a ≤ 500 m | Se une automáticamente |
+| Foto parecida pero lejos, o misma categoría a ≤ 50 m | Queda como **posible duplicado** en el panel; decide el moderador |
+| Unión equivocada | «Separar en ticket nuevo» en el panel |
+| Duplicado no detectado | «Marcar como duplicado de T-XXXX» en el panel |
+
+Las huellas se calculan en el servidor (la del teléfono no se usa) y las fotos casi uniformes (muy oscuras)
+no se unen por huella perceptual. Los umbrales están en `shared/rules.js`. Al vecino no se le informa si su
+reporte se unió a un caso existente.
+
+Las fotos se reducen en el teléfono antes de subirse (JPEG de 1600 px, ~100–300 KB) y así se eliminan
+sus metadatos EXIF, incluida la ubicación GPS.
 
 ## Rutas de la API
 
 | Método | Ruta | Acceso |
 |---|---|---|
-| GET | `/reports` | Pública (sin datos de contacto) |
-| POST | `/uploads` | Pública: devuelve URL firmada para subir 1 foto (≤ 5 MB, JPG/PNG/WebP) |
-| POST | `/reports` | Pública: crea el reporte; devuelve un `deleteToken` |
+| GET | `/reports` | Pública: casos agrupados, sin datos de contacto ni número de ticket |
+| POST | `/uploads` | Pública: URL firmada para subir 1 foto JPEG (≤ 3 MB) |
+| POST | `/reports` | Pública: crea el reporte (y lo asigna a un ticket); devuelve un `deleteToken` |
 | DELETE | `/reports/{id}` | Quien lo creó (cabecera `X-Delete-Token`) |
 | POST | `/reports/{id}/flags` | Pública: aviso de contenido |
-| GET | `/admin/reports` · `/admin/flags` | Moderadores (incluye datos de contacto) |
+| GET | `/admin/tickets` · `/admin/flags` | Moderadores (incluye datos de contacto y sugerencias de duplicado) |
+| POST | `/admin/tickets/{ticketId}/merge` | Moderadores: `{"into":"T-0042"}` |
+| POST | `/admin/reports/{id}/detach` | Moderadores: saca el reporte a un ticket nuevo |
 | DELETE | `/admin/reports/{id}` | Moderadores |
 | PATCH | `/admin/reports/{id}/flags/{flagId}` | Moderadores (`{"status":"resolved"}`) |
 

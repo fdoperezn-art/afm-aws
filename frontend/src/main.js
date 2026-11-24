@@ -8,7 +8,7 @@ import { BOUNDARY } from '../../shared/boundary.js';
 import { CATEGORIES } from '../../shared/categories.js';
 import { BOUNDS, CENTER, OUTSIDE_MESSAGE, isInsideConchali } from '../../shared/geo.js';
 import {
-  FLAG_REASONS, MAX_PHOTO_BYTES, PHOTO_TYPES, RELATIONS, SECTORS, TERMS_VERSION, categoryById, validateStep,
+  FLAG_REASONS, INPUT_TYPES, MAX_ORIGINAL_BYTES, RELATIONS, SECTORS, TERMS_VERSION, categoryById, validateStep,
 } from '../../shared/rules.js';
 import {
   DEMO_REPORTS, LEGAL, LEGAL_HEADINGS, LEGAL_TITLES, PRIVACY_EXTRA, SERVICE_NOTICE,
@@ -18,13 +18,14 @@ import { formatAddress, partsFromNominatim, reverseGeocode, searchAddress } from
 import { $, $$, brand, esc, fold, formatDate, toast } from './lib/dom.js';
 import { icon, roadSign } from './lib/icons.js';
 import * as mine from './lib/my-reports.js';
+import { reducePhoto } from './lib/photos.js';
 
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
 
 // ---------- Estado ----------
-let reports = []; // reportes públicos del servidor
+let cases = []; // casos públicos del servidor (cada caso agrupa los reportes de uno o más vecinos)
 let visibleCategories = new Set(CATEGORIES.map((c) => c.id));
 let searchText = '';
 let showExamples = false;
@@ -126,7 +127,19 @@ const dialogHeader = (title, eyebrow = '') =>
   `<div class="dialog-header"><div>${eyebrow ? `<span class="eyebrow muted">${eyebrow}</span>` : ''}<h2 id="dialog-title">${title}</h2></div><button class="icon-button" data-close aria-label="Cerrar">${icon('x', 23)}</button></div>`;
 
 // ---------- Datos visibles ----------
-const allReports = () => [...reports, ...(showExamples ? DEMO_REPORTS : [])];
+const allReports = () => [...cases, ...(showExamples ? DEMO_REPORTS : [])];
+/** Reportes de los vecinos dentro de un caso (los ejemplos tienen uno solo). */
+const caseReports = (c) =>
+  c.reports || [{ id: c.id, description: c.description, createdAt: c.createdAt, photos: c.photos || [] }];
+const caseCount = (c) => c.reportCount || 1;
+const totalReports = () => cases.reduce((n, c) => n + caseCount(c), 0);
+const findCase = (reportId) => cases.find((c) => caseReports(c).some((r) => r.id === reportId));
+
+async function reloadCases() {
+  cases = await api.listReports();
+  refresh();
+  if (view === 'reports') renderMyReports();
+}
 
 function filteredReports() {
   const q = fold(searchText);
@@ -137,7 +150,7 @@ function filteredReports() {
   );
 }
 
-const recentReports = () => [...reports].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 6);
+const recentReports = () => [...cases].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
 
 function renderFilters() {
   const focused = document.activeElement?.dataset.category;
@@ -205,22 +218,25 @@ function refresh() {
       : `reportes${demoCount ? ` · ${demoCount} de ejemplo` : ''}`;
   $('#map-empty').hidden = visible.length !== 0;
   $('#my-count').textContent = mine.myReports().length;
-  $('#citizen-count').textContent = reports.length.toLocaleString('es-CL');
+  $('#citizen-count').textContent = totalReports().toLocaleString('es-CL');
   $('#map-mode-note').innerHTML = `${icon('info', 14)} ${showExamples ? 'Ejemplos activados · No son reclamos reales' : 'Reportes ciudadanos publicados'}`;
   renderFilters();
   renderRecent();
 }
 
-const photoUrl = (r, i = 0) => r.photos?.[i]?.url;
+/** Primera foto disponible del caso. */
+const photoUrl = (c) => caseReports(c).flatMap((r) => r.photos || [])[0]?.url;
+const neighborsLine = (c) =>
+  caseCount(c) > 1 ? `<p class="case-count">${icon('user', 14)} ${caseCount(c)} vecinos lo reportaron</p>` : '';
 
 function previewHtml(r) {
   const cat = categoryById(r.category);
-  return `<article class="report-preview"><span class="preview-category">${icon(cat.icon, 15)} ${esc(cat.name)}</span><h3>${esc(r.detail)}</h3>${photoUrl(r) ? `<img src="${esc(photoUrl(r))}" alt="Fotografía del problema reportado">` : `<div class="preview-no-photo">${icon('camera', 26)} Ejemplo sin fotografía</div>`}<p>${icon('map-pin', 14)} ${esc(formatAddress(r))}</p><p>${icon('clock', 14)} ${formatDate(r.createdAt)}</p>${r.demo ? '<span class="preview-demo">REPORTE DE EJEMPLO</span>' : ''}<button class="preview-open" data-report="${esc(r.id)}">VER REPORTE ${icon('arrow-right', 17)}</button></article>`;
+  return `<article class="report-preview"><span class="preview-category">${icon(cat.icon, 15)} ${esc(cat.name)}</span><h3>${esc(r.detail)}</h3>${photoUrl(r) ? `<img src="${esc(photoUrl(r))}" alt="Fotografía del problema reportado">` : `<div class="preview-no-photo">${icon('camera', 26)} Ejemplo sin fotografía</div>`}<p>${icon('map-pin', 14)} ${esc(formatAddress(r))}</p><p>${icon('clock', 14)} ${formatDate(r.createdAt)}</p>${neighborsLine(r)}${r.demo ? '<span class="preview-demo">REPORTE DE EJEMPLO</span>' : ''}<button class="preview-open" data-report="${esc(r.id)}">VER REPORTE ${icon('arrow-right', 17)}</button></article>`;
 }
 
 function cardHtml(r) {
   const cat = categoryById(r.category);
-  return `<button class="report-card" data-report="${esc(r.id)}">${roadSign(cat.icon)}<span class="report-card-body"><span class="report-card-meta">${esc(cat.name)}<span>${r.demo ? 'EJEMPLO' : 'CIUDADANO'}</span></span><strong>${esc(r.detail)}</strong><span class="report-address">${icon('map-pin', 13)} ${esc(formatAddress(r))}</span><span class="report-card-date">${formatDate(r.createdAt)}</span></span>${photoUrl(r) ? `<img class="report-thumbnail" src="${esc(photoUrl(r))}" alt="Fotografía del problema" loading="lazy">` : icon('arrow-up-right', 19)}</button>`;
+  return `<button class="report-card" data-report="${esc(r.id)}">${roadSign(cat.icon)}<span class="report-card-body"><span class="report-card-meta">${esc(cat.name)}<span>${r.demo ? 'EJEMPLO' : caseCount(r) > 1 ? `${caseCount(r)} VECINOS` : 'CIUDADANO'}</span></span><strong>${esc(r.detail)}</strong><span class="report-address">${icon('map-pin', 13)} ${esc(formatAddress(r))}</span><span class="report-card-date">${formatDate(r.createdAt)}</span></span>${photoUrl(r) ? `<img class="report-thumbnail" src="${esc(photoUrl(r))}" alt="Fotografía del problema" loading="lazy">` : icon('arrow-up-right', 19)}</button>`;
 }
 
 function renderRecent() {
@@ -243,9 +259,9 @@ function showView(name) {
 function renderMyReports() {
   const entries = mine.myReports().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const items = entries.map((entry) => {
-    const r = reports.find((x) => x.id === entry.id);
-    if (r)
-      return `<div class="my-report">${cardHtml(r)}<div class="my-report-footer"><span>${esc(r.id)} · ${formatDate(r.createdAt)}</span><span class="status-pill">${icon('check', 13)} Publicado</span></div></div>`;
+    const c = findCase(entry.id);
+    if (c)
+      return `<div class="my-report">${cardHtml(c)}<div class="my-report-footer"><span>${esc(entry.id)} · ${formatDate(entry.createdAt)}</span><span class="status-pill">${icon('check', 13)} Publicado</span></div></div>`;
     return `<div class="my-report"><div class="report-card" aria-disabled="true">${roadSign('circle-alert')}<span class="report-card-body"><strong>Reporte no disponible</strong><span class="report-address">Fue eliminado por moderación o ya no existe.</span></span></div><div class="my-report-footer"><span>${esc(entry.id)} · ${formatDate(entry.createdAt)}</span><button class="text-button" data-forget="${esc(entry.id)}">Quitar de la lista</button></div></div>`;
   });
   $('#reports-view').innerHTML =
@@ -265,54 +281,72 @@ function renderMyReports() {
 }
 
 // ---------- Detalle de un reporte ----------
-function openReport(r) {
-  const cat = categoryById(r.category);
-  const own = !r.demo && mine.isMine(r.id);
+function reportBlock(c, r, many) {
+  const own = !c.demo && mine.isMine(r.id);
+  return `<section class="case-report">${many ? `<p class="muted case-report-date">${icon('user', 14)} Reporte del ${formatDate(r.createdAt)}${own ? ' · <strong>tu reporte</strong>' : ''}</p>` : ''}<p class="description">${esc(r.description)}</p><div class="report-photos">${(r.photos || []).map((p, i) => `<img src="${esc(p.url)}" alt="Fotografía ${i + 1} del problema reportado">`).join('')}</div>${c.demo ? '' : `<div class="case-report-actions"><button class="text-button content-flag-button" data-flag="${esc(r.id)}">&#9873; Reportar contenido</button>${own ? `<button class="text-button danger" data-delete-own="${esc(r.id)}">Eliminar mi reporte</button>` : ''}</div>`}</section>`;
+}
+
+function openReport(c) {
+  const cat = categoryById(c.category);
+  const list = caseReports(c);
+  const many = list.length > 1;
   openDialog(
-    `${dialogHeader(r.demo ? 'Reporte de ejemplo' : 'Detalle del reporte', esc(r.id))}<div class="dialog-body report-detail"><div class="report-detail-title">${roadSign(cat.icon)}<div><span class="muted">${esc(cat.name)}</span><h3>${esc(r.detail)}</h3></div></div><p class="report-address">${icon('map-pin', 17)} ${esc(formatAddress(r))}</p><p class="muted">${formatDate(r.createdAt)}</p><p class="description">${esc(r.description)}</p><div class="report-photos">${(r.photos || []).map((p, i) => `<img src="${esc(p.url)}" alt="Fotografía ${i + 1} del problema reportado">`).join('')}</div>${r.demo ? '' : '<button class="text-button content-flag-button" id="report-content">&#9873; Reportar contenido</button>'}<div class="local-notice">${icon('info', 20)} ${r.demo ? 'Datos ficticios para mostrar cómo funciona AFM. No es un reclamo real.' : 'Reporte ciudadano publicado en AFM. No se ha enviado a la municipalidad.'}</div><div class="detail-actions"><button class="button orange" id="see-location">${icon('map', 17)} Ver ubicación</button>${r.demo ? '' : `<button class="button outline" id="export-report">${icon('download', 17)} Descargar</button>`}${own ? '<button class="text-button danger" id="delete-report">Eliminar</button>' : ''}</div></div>`,
+    `${dialogHeader(c.demo ? 'Reporte de ejemplo' : 'Detalle del reporte', esc(c.id))}<div class="dialog-body report-detail"><div class="report-detail-title">${roadSign(cat.icon)}<div><span class="muted">${esc(cat.name)}</span><h3>${esc(c.detail)}</h3></div></div><p class="report-address">${icon('map-pin', 17)} ${esc(formatAddress(c))}</p><p class="muted">${formatDate(c.createdAt)}</p>${many ? `<p class="case-count">${icon('user', 16)} <strong>${list.length} vecinos</strong> reportaron este problema</p>` : ''}${list.map((r) => reportBlock(c, r, many)).join('')}<div class="local-notice">${icon('info', 20)} ${c.demo ? 'Datos ficticios para mostrar cómo funciona AFM. No es un reclamo real.' : 'Reporte ciudadano publicado en AFM. No se ha enviado a la municipalidad.'}</div><div class="detail-actions"><button class="button orange" id="see-location">${icon('map', 17)} Ver ubicación</button>${c.demo ? '' : `<button class="button outline" id="export-report">${icon('download', 17)} Descargar</button>`}</div></div>`,
     'light-dialog',
   );
-  if (!r.demo) $('#report-content').onclick = () => openFlagForm(r);
+  $$('[data-flag]', dialog).forEach((b) => (b.onclick = () => openFlagForm(c, b.dataset.flag)));
+  $$('[data-delete-own]', dialog).forEach((b) => (b.onclick = () => confirmDelete(c, b.dataset.deleteOwn)));
   $('#see-location').onclick = () => {
     closeDialog();
     showView('map');
-    if (!filteredReports().some((x) => x.id === r.id)) {
-      visibleCategories.add(r.category);
+    if (!filteredReports().some((x) => x.id === c.id)) {
+      visibleCategories.add(c.category);
       searchText = '';
       $('#report-search').value = '';
       refresh();
     }
-    mainMap.setView([r.lat, r.lng], 17);
+    mainMap.setView([c.lat, c.lng], 17);
     $('#map-section').scrollIntoView({ behavior: 'smooth' });
   };
-  if (r.demo) return;
+  if (c.demo) return;
   $('#export-report').onclick = () => {
-    const data = { ...r, address: formatAddress(r), photos: (r.photos || []).length };
+    const data = {
+      id: c.id,
+      category: categoryById(c.category).name,
+      detail: c.detail,
+      address: formatAddress(c),
+      lat: c.lat,
+      lng: c.lng,
+      reports: list.map((r) => ({ fecha: r.createdAt, descripcion: r.description, fotos: (r.photos || []).length })),
+    };
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-    a.download = `${r.id}.json`;
+    a.download = `${c.id}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     toast('Reporte descargado sin datos de contacto.');
   };
-  if (own) $('#delete-report').onclick = () => confirmDelete(r);
 }
 
-function confirmDelete(r) {
+function confirmDelete(c, reportId) {
   openDialog(
-    `${dialogHeader('¿Eliminar este reporte?')}<div class="dialog-body"><p>Se eliminarán del mapa el reporte, sus fotos y tus datos de contacto. Esta acción no se puede deshacer.</p><div class="detail-actions"><button class="button outline" id="keep-report">Conservar</button><button class="button orange" id="confirm-delete">Eliminar reporte</button></div></div>`,
+    `${dialogHeader('¿Eliminar tu reporte?')}<div class="dialog-body"><p>Se eliminarán del mapa tu reporte, sus fotos y tus datos de contacto. Esta acción no se puede deshacer.</p><div class="detail-actions"><button class="button outline" id="keep-report">Conservar</button><button class="button orange" id="confirm-delete">Eliminar reporte</button></div></div>`,
     'light-dialog',
   );
-  $('#keep-report').onclick = () => openReport(r);
+  $('#keep-report').onclick = () => openReport(c);
   $('#confirm-delete').onclick = async () => {
     const btn = $('#confirm-delete');
     btn.disabled = true;
     try {
-      await api.deleteOwnReport(r.id, mine.tokenFor(r.id));
-      mine.forget(r.id);
-      reports = reports.filter((x) => x.id !== r.id);
+      await api.deleteOwnReport(reportId, mine.tokenFor(reportId));
+      mine.forget(reportId);
       closeDialog();
-      refresh();
+      await reloadCases().catch(() => {
+        cases = cases
+          .map((x) => ({ ...x, reports: caseReports(x).filter((r) => r.id !== reportId) }))
+          .filter((x) => x.reports.length);
+        refresh();
+      });
       if (view === 'reports') renderMyReports();
       toast('Reporte eliminado.');
     } catch {
@@ -382,12 +416,12 @@ function openLegalOverlay(key) {
 }
 
 // ---------- Denunciar contenido ----------
-function openFlagForm(r) {
+function openFlagForm(c, reportId) {
   openDialog(
-    `${dialogHeader('Reportar contenido', esc(r.id))}<form class="dialog-body" id="content-flag-form"><p>Indica por qué consideras que este reporte incumple las normas de uso de AFM.</p><fieldset class="flag-reasons"><legend>Motivo del aviso</legend>${FLAG_REASONS.map((reason, i) => `<label class="radio-option"><input type="radio" name="flag-reason" value="${i}" required><span>${reason}</span></label>`).join('')}</fieldset><label class="field-label" for="flag-note">Información adicional <span>(opcional)</span></label><textarea class="dark-input" id="flag-note" maxlength="500" rows="3" placeholder="Cuéntanos qué debemos revisar…"></textarea><div class="local-notice">${icon('info', 18)} Tu aviso llegará al equipo de moderación de AFM.</div><p class="form-error" id="flag-error" role="alert" hidden></p><div class="detail-actions"><button class="button outline" id="cancel-flag" type="button">Volver al reporte</button><button class="button orange" type="submit">Enviar aviso ${icon('check', 18)}</button></div></form>`,
+    `${dialogHeader('Reportar contenido', esc(reportId))}<form class="dialog-body" id="content-flag-form"><p>Indica por qué consideras que este reporte incumple las normas de uso de AFM.</p><fieldset class="flag-reasons"><legend>Motivo del aviso</legend>${FLAG_REASONS.map((reason, i) => `<label class="radio-option"><input type="radio" name="flag-reason" value="${i}" required><span>${reason}</span></label>`).join('')}</fieldset><label class="field-label" for="flag-note">Información adicional <span>(opcional)</span></label><textarea class="dark-input" id="flag-note" maxlength="500" rows="3" placeholder="Cuéntanos qué debemos revisar…"></textarea><div class="local-notice">${icon('info', 18)} Tu aviso llegará al equipo de moderación de AFM.</div><p class="form-error" id="flag-error" role="alert" hidden></p><div class="detail-actions"><button class="button outline" id="cancel-flag" type="button">Volver al reporte</button><button class="button orange" type="submit">Enviar aviso ${icon('check', 18)}</button></div></form>`,
     'light-dialog',
   );
-  $('#cancel-flag').onclick = () => openReport(r);
+  $('#cancel-flag').onclick = () => openReport(c);
   $('#content-flag-form').onsubmit = async (e) => {
     e.preventDefault();
     if (busy) return;
@@ -398,13 +432,13 @@ function openFlagForm(r) {
     busy = true;
     submit.disabled = true;
     try {
-      await api.flagReport(r.id, { reason, note: $('#flag-note').value.trim().slice(0, 500) });
+      await api.flagReport(reportId, { reason, note: $('#flag-note').value.trim().slice(0, 500) });
       busy = false;
       openDialog(
-        `${dialogHeader('Aviso enviado')}<div class="dialog-body"><p>Motivo: <strong>${esc(reason)}</strong></p><p>El aviso sobre el reporte <strong>${esc(r.id)}</strong> fue enviado al equipo de moderación de AFM.</p><button class="button orange full" id="flag-done">Volver al reporte ${icon('arrow-right', 18)}</button></div>`,
+        `${dialogHeader('Aviso enviado')}<div class="dialog-body"><p>Motivo: <strong>${esc(reason)}</strong></p><p>El aviso sobre el reporte <strong>${esc(reportId)}</strong> fue enviado al equipo de moderación de AFM.</p><button class="button orange full" id="flag-done">Volver al reporte ${icon('arrow-right', 18)}</button></div>`,
         'light-dialog',
       );
-      $('#flag-done').onclick = () => openReport(r);
+      $('#flag-done').onclick = () => openReport(c);
     } catch {
       busy = false;
       submit.disabled = false;
@@ -503,7 +537,7 @@ function stepHtml() {
     <label class="field-label" for="location-sector">Sector, población o barrio <span>(opcional)</span></label><input class="dark-input" id="location-sector" data-address-part="neighborhood" maxlength="100" placeholder="El Cortijo" value="${esc(draft.addressParts.neighborhood)}">
     <p class="field-help">La línea naranja muestra el límite comunal. Solo se pueden registrar reportes dentro de Conchalí.</p>`;
   if (step === 3)
-    return `<span class="eyebrow">PASO 04 / 05</span><h3>Una imagen lo hace visible.</h3><p class="step-subtitle">Agrega 1 o 2 fotos del problema.<br>Las fotos ayudan a mostrar mejor lo que está pasando.</p><p class="field-help photo-help">JPG, PNG o WebP, hasta 5 MB por foto.</p><div class="photo-grid">${[0, 1].map((i) => (draft.photos[i] ? `<div class="photo-preview"><img src="${draft.photos[i].url}" alt="Fotografía ${i + 1} adjunta"><button class="icon-button" data-remove-photo="${i}" aria-label="Eliminar fotografía ${i + 1}">${icon('x', 17)}</button><span>Foto ${i + 1}</span></div>` : `<label class="photo-upload">${icon('camera', 32)}<strong>Agregar foto</strong><span>${i + 1} de 2 · máx. 5 MB</span><input type="file" accept="${PHOTO_TYPES.join(',')}" aria-label="Agregar fotografía ${i + 1}" data-photo="${i}"></label>`)).join('')}</div><label class="field-label" for="description">¿Qué está pasando? <span class="required">*</span></label><textarea id="description" class="dark-input" rows="4" maxlength="500" placeholder="Describe lo que ocurre y cómo afecta a tu barrio…">${esc(draft.description)}</textarea><span class="char-count"><span id="char-count">${draft.description.length}</span> / 500</span><p class="field-help">Evita incluir datos personales de otras personas en el texto y las fotos.</p>`;
+    return `<span class="eyebrow">PASO 04 / 05</span><h3>Una imagen lo hace visible.</h3><p class="step-subtitle">Agrega 1 o 2 fotos del problema.<br>Las fotos ayudan a mostrar mejor lo que está pasando.</p><p class="field-help photo-help">JPG, PNG, WebP o HEIC. Las fotos se reducen automáticamente antes de enviarse.</p><div class="photo-grid">${[0, 1].map((i) => (draft.photos[i] ? `<div class="photo-preview"><img src="${draft.photos[i].url}" alt="Fotografía ${i + 1} adjunta"><button class="icon-button" data-remove-photo="${i}" aria-label="Eliminar fotografía ${i + 1}">${icon('x', 17)}</button><span>Foto ${i + 1}</span></div>` : `<label class="photo-upload">${icon('camera', 32)}<strong>Agregar foto</strong><span>${i + 1} de 2</span><input type="file" accept="${INPUT_TYPES.join(',')}" aria-label="Agregar fotografía ${i + 1}" data-photo="${i}"></label>`)).join('')}</div><label class="field-label" for="description">¿Qué está pasando? <span class="required">*</span></label><textarea id="description" class="dark-input" rows="4" maxlength="500" placeholder="Describe lo que ocurre y cómo afecta a tu barrio…">${esc(draft.description)}</textarea><span class="char-count"><span id="char-count">${draft.description.length}</span> / 500</span><p class="field-help">Evita incluir datos personales de otras personas en el texto y las fotos.</p>`;
   return `<span class="eyebrow">PASO 05 / 05</span><h3>Tu voz tiene nombre.</h3><p class="step-subtitle">Completa tus datos para acompañar este reporte.</p><div class="field-row">${textField('firstName', 'Nombre', 'Tu nombre', 'given-name')}${textField('lastName', 'Apellido', 'Tu apellido', 'family-name')}</div><label class="field-label" for="phone">WhatsApp <span class="required">*</span></label><div class="phone-input"><span>+56</span><input id="phone" data-field="phone" type="tel" inputmode="tel" maxlength="12" autocomplete="tel-national" placeholder="9 1234 5678" value="${esc(draft.phone)}"></div>${selectField('relation', '¿Cuál es tu relación con Conchalí?', RELATIONS)}${selectField('sector', '¿Qué relación tienes con este sector?', SECTORS)}<div class="consent"><input type="checkbox" id="consent" aria-labelledby="consent-label" ${draft.consent ? 'checked' : ''}><div id="consent-label">Declaro conocer y aceptar los <button type="button" class="inline-link" data-legal="privacy">Términos y privacidad</button> y las <button type="button" class="inline-link" data-legal="rules">normas de uso de AFM</button>, y que este reporte no contiene insultos, amenazas, llamados a la violencia, expresiones de odio ni datos personales innecesarios de terceros.</div></div><div class="wizard-notice">${icon('lock', 18)}<span>Tu nombre, apellido y WhatsApp no se publican: solo los ve el equipo de moderación de AFM. No se envían a la municipalidad.</span></div>`;
 }
 
@@ -715,26 +749,25 @@ async function addPhoto(input) {
   if (busy) return;
   const file = input.files[0];
   if (!file) return;
-  if (!PHOTO_TYPES.includes(file.type)) {
+  if (file.type && !INPUT_TYPES.includes(file.type)) {
     input.value = '';
-    return showFormError('Usa una foto JPG, PNG o WebP.');
+    return showFormError('Usa una foto JPG, PNG, WebP o HEIC.');
   }
-  if (file.size > MAX_PHOTO_BYTES) {
+  if (file.size > MAX_ORIGINAL_BYTES) {
     input.value = '';
-    return showFormError('La fotografía supera los 5 MB. Elige una más pequeña.');
+    return showFormError('La fotografía supera los 15 MB. Elige una más pequeña.');
   }
-  const url = URL.createObjectURL(file);
+  busy = true;
+  $('#wizard-next').disabled = true;
   try {
-    await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = resolve;
-      img.onerror = reject;
-      img.src = url;
-    });
-    draft.photos.push({ name: file.name, file, url });
+    const { blob, url } = await reducePhoto(file);
+    draft.photos.push({ name: file.name, file: blob, url });
+    busy = false;
     renderWizard();
   } catch {
-    URL.revokeObjectURL(url);
+    busy = false;
+    $('#wizard-next').disabled = false;
+    input.value = '';
     showFormError('No se pudo leer la fotografía. Intenta con otra imagen.');
   }
 }
@@ -779,12 +812,11 @@ async function submitReport() {
       termsVersion: TERMS_VERSION,
     });
     mine.remember({ id: report.id, deleteToken, createdAt: report.createdAt });
-    reports.push(report);
+    const summary = { ...report, category: draft.category, detail: draft.detail, addressParts: { ...draft.addressParts } };
     discardDraft();
     busy = false;
-    refresh();
-    if (view === 'reports') renderMyReports();
-    showSuccess(report);
+    await reloadCases().catch(() => refresh());
+    showSuccess(summary);
   } catch (err) {
     busy = false;
     next.disabled = false;
@@ -826,7 +858,7 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('[data-menu]')) return openMenu();
   const card = e.target.closest('[data-report]');
   if (card) {
-    const r = [...reports, ...DEMO_REPORTS].find((x) => x.id === card.dataset.report);
+    const r = [...cases, ...DEMO_REPORTS].find((x) => x.id === card.dataset.report);
     if (r) openReport(r);
   }
 });
@@ -885,7 +917,7 @@ document.addEventListener('keydown', (e) => {
 // ---------- Inicio ----------
 initMainMap();
 try {
-  reports = await api.listReports();
+  cases = await api.listReports();
   refresh();
 } catch {
   toast('No se pudieron cargar los reportes. Puedes explorar los ejemplos mientras tanto.');

@@ -9,7 +9,7 @@ import './admin.css';
 import { categoryById } from '../../../shared/rules.js';
 import * as api from '../lib/api.js';
 import { formatAddress } from '../lib/address.js';
-import { $, $$, brand, esc, formatDateTime, toast } from '../lib/dom.js';
+import { $, $$, brand, esc, fold, formatDateTime, toast } from '../lib/dom.js';
 import { icon, roadSign } from '../lib/icons.js';
 
 Amplify.configure({
@@ -21,9 +21,10 @@ Amplify.configure({
   },
 });
 
-let tab = 'flags';
-let reports = [];
+let tab = 'tickets';
+let tickets = [];
 let flags = [];
+let filterText = '';
 
 const app = $('#app');
 
@@ -125,11 +126,17 @@ function renderForm(title, text, fields) {
 }
 
 // ---------- Panel ----------
+const DUP_LABELS = {
+  'foto-identica': 'Unido automáticamente: misma foto',
+  'foto-similar': 'Unido automáticamente: foto casi idéntica',
+  manual: 'Unido por moderación',
+};
+
 async function loadDashboard() {
   shell('<p class="muted admin-loading">Cargando…</p>');
   try {
     const token = await idToken();
-    [reports, flags] = await Promise.all([api.admin.reports(token), api.admin.flags(token)]);
+    [tickets, flags] = await Promise.all([api.admin.tickets(token), api.admin.flags(token)]);
     renderDashboard();
   } catch (err) {
     if (err instanceof api.ApiError && err.status === 401) {
@@ -141,10 +148,21 @@ async function loadDashboard() {
   }
 }
 
+const ticketOfReport = (reportId) => tickets.find((t) => t.reports.some((r) => r.id === reportId));
+
+function matchesFilter(t) {
+  const q = fold(filterText.trim());
+  if (!q) return true;
+  return fold(`${t.id} ${t.detail} ${categoryById(t.category).name} ${formatAddress(t)} ${t.reports.map((r) => r.id).join(' ')}`).includes(q);
+}
+
 function renderDashboard() {
   const openFlags = flags.filter((f) => f.status === 'open');
-  shell(`<div class="section-title"><div><span class="eyebrow muted">EQUIPO AFM</span><h1>Moderación<span class="orange-text">.</span></h1></div></div>
-    <div class="admin-tabs" role="tablist"><button role="tab" data-tab="flags" aria-selected="${tab === 'flags'}">${icon('flag', 16)} Avisos abiertos <span>${openFlags.length}</span></button><button role="tab" data-tab="reports" aria-selected="${tab === 'reports'}">${icon('reports', 16)} Reportes <span>${reports.length}</span></button><button role="tab" data-tab="history" aria-selected="${tab === 'history'}">${icon('check', 16)} Avisos resueltos <span>${flags.length - openFlags.length}</span></button></div>
+  const reportCount = tickets.reduce((n, t) => n + t.reportCount, 0);
+  const suggested = tickets.filter((t) => t.suggestions.length).length;
+  shell(`<div class="section-title"><div><span class="eyebrow muted">EQUIPO AFM</span><h1>Moderación<span class="orange-text">.</span></h1><p class="muted">${tickets.length} tickets · ${reportCount} reportes de vecinos${suggested ? ` · <strong class="orange-text">${suggested} con posibles duplicados</strong>` : ''}</p></div></div>
+    <div class="admin-tabs" role="tablist"><button role="tab" data-tab="tickets" aria-selected="${tab === 'tickets'}">${icon('reports', 16)} Tickets <span>${tickets.length}</span></button><button role="tab" data-tab="flags" aria-selected="${tab === 'flags'}">${icon('flag', 16)} Avisos abiertos <span>${openFlags.length}</span></button><button role="tab" data-tab="history" aria-selected="${tab === 'history'}">${icon('check', 16)} Avisos resueltos <span>${flags.length - openFlags.length}</span></button></div>
+    ${tab === 'tickets' ? `<label class="search-field admin-search">${icon('search', 18)}<input id="ticket-filter" placeholder="Buscar por ticket (T-0042), calle o problema" value="${esc(filterText)}"></label>` : ''}
     <div id="admin-content"></div>`);
   $('#admin-actions').innerHTML = `<button class="button outline small" id="reload">${icon('refresh', 16)} Actualizar</button><button class="button black small" id="logout">${icon('log-out', 16)} Salir</button>`;
   $('#reload').onclick = loadDashboard;
@@ -159,39 +177,101 @@ function renderDashboard() {
         renderDashboard();
       }),
   );
+  renderContent();
+  const filter = $('#ticket-filter');
+  if (filter)
+    filter.oninput = () => {
+      filterText = filter.value;
+      renderContent();
+    };
+}
+
+function renderContent() {
   const content = $('#admin-content');
-  if (tab === 'reports') content.innerHTML = reports.length ? reports.map(reportCard).join('') : empty('Aún no hay reportes.');
-  else {
-    const list = tab === 'flags' ? openFlags : flags.filter((f) => f.status !== 'open');
-    content.innerHTML = list.length ? list.map(flagCard).join('') : empty(tab === 'flags' ? 'No hay avisos pendientes.' : 'No hay avisos resueltos.');
+  if (tab === 'tickets') {
+    const list = tickets.filter(matchesFilter);
+    content.innerHTML = list.length
+      ? list.map(ticketCard).join('')
+      : empty(tickets.length ? 'Ningún ticket coincide con la búsqueda.' : 'Aún no hay reportes.');
+  } else {
+    const list = tab === 'flags' ? flags.filter((f) => f.status === 'open') : flags.filter((f) => f.status !== 'open');
+    content.innerHTML = list.length
+      ? list.map(flagCard).join('')
+      : empty(tab === 'flags' ? 'No hay avisos pendientes.' : 'No hay avisos resueltos.');
   }
-  $$('[data-delete]').forEach((b) => (b.onclick = () => deleteReport(b.dataset.delete)));
-  $$('[data-resolve]').forEach((b) => (b.onclick = () => resolveFlag(b.dataset.report, b.dataset.resolve)));
+  $$('[data-delete]', content).forEach((b) => (b.onclick = () => deleteReport(b.dataset.delete)));
+  $$('[data-detach]', content).forEach((b) => (b.onclick = () => detachReport(b.dataset.detach)));
+  $$('[data-resolve]', content).forEach((b) => (b.onclick = () => resolveFlag(b.dataset.report, b.dataset.resolve)));
+  $$('[data-merge-into]', content).forEach(
+    (b) => (b.onclick = () => mergeTicket(b.dataset.mergeFrom, b.dataset.mergeInto)),
+  );
+  $$('form[data-merge-form]', content).forEach(
+    (form) =>
+      (form.onsubmit = (e) => {
+        e.preventDefault();
+        mergeTicket(form.dataset.mergeForm, $('input', form).value);
+      }),
+  );
 }
 
 const empty = (text) => `<div class="admin-empty">${icon('check', 28)}<p>${text}</p></div>`;
+const mapLink = (p) =>
+  `<a href="https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lng}#map=18/${p.lat}/${p.lng}" target="_blank" rel="noopener">ver en mapa</a>`;
 
-function reportCard(r, { compact = false } = {}) {
-  const cat = categoryById(r.category);
+function ticketCard(t) {
+  const cat = categoryById(t.category);
+  const many = t.reports.length > 1;
+  return `<article class="admin-ticket" id="ticket-${esc(t.id)}"><header class="admin-ticket-head">${roadSign(cat.icon, 'local-sign')}<div><span class="ticket-number">${esc(t.id)}</span><h3>${esc(t.detail)}</h3><p class="muted">${esc(cat.name)} · ${icon('map-pin', 13)} ${esc(formatAddress(t))} ${mapLink(t)}</p><p class="muted">${t.reportCount} reporte${t.reportCount > 1 ? 's' : ''} · último ${formatDateTime(t.updatedAt)}</p></div></header>
+    ${t.suggestions.length ? `<div class="admin-suggestions">${t.suggestions.map((s) => `<div>${icon('circle-alert', 16)} <span>Posible duplicado de <a href="#ticket-${esc(s.ticketId)}"><strong>${esc(s.ticketId)}</strong></a> — ${esc(s.reason)} (${s.meters} m)</span><button class="button outline small" data-merge-from="${esc(t.id)}" data-merge-into="${esc(s.ticketId)}">Unir a ${esc(s.ticketId)}</button></div>`).join('')}</div>` : ''}
+    <form class="admin-merge" data-merge-form="${esc(t.id)}"><label for="merge-${esc(t.id)}">Marcar como duplicado de</label><input class="dark-input" id="merge-${esc(t.id)}" placeholder="T-0000" pattern="[Tt]-\\d{4,}" required><button class="button black small" type="submit">Unir</button></form>
+    ${t.reports.map((r) => reportCard(r, { canDetach: many })).join('')}</article>`;
+}
+
+function reportCard(r, { canDetach = false } = {}) {
   const c = r.contact || {};
-  return `<article class="admin-report">${roadSign(cat.icon, 'local-sign')}<div class="admin-report-body"><span class="muted">${esc(cat.name)} · <strong>${esc(r.id)}</strong> · ${formatDateTime(r.createdAt)}</span><h3>${esc(r.detail)}</h3><p>${icon('map-pin', 14)} ${esc(formatAddress(r))} <a href="https://www.openstreetmap.org/?mlat=${r.lat}&mlon=${r.lng}#map=18/${r.lat}/${r.lng}" target="_blank" rel="noopener">ver en mapa</a></p><p class="description">${esc(r.description)}</p>${compact ? '' : `<div class="admin-photos">${(r.photos || []).map((p, i) => `<a href="${esc(p.url)}" target="_blank" rel="noopener"><img src="${esc(p.url)}" alt="Foto ${i + 1}" loading="lazy"></a>`).join('')}</div>`}<dl class="admin-contact"><div><dt>Nombre</dt><dd>${esc(c.firstName)} ${esc(c.lastName)}</dd></div><div><dt>WhatsApp</dt><dd>${esc(c.phone)}</dd></div><div><dt>Relación</dt><dd>${esc(c.relation)} · ${esc(c.sector)}</dd></div><div><dt>Aceptó términos</dt><dd>${c.consentAt ? formatDateTime(c.consentAt) : '—'} (v${esc(c.termsVersion)})</dd></div></dl>${r.flagCount ? `<p class="admin-flag-count">${icon('flag', 14)} ${r.flagCount} aviso(s)</p>` : ''}<div class="detail-actions"><button class="text-button danger" data-delete="${esc(r.id)}">Eliminar reporte</button></div></div></article>`;
+  const dup = DUP_LABELS[r.dupReason];
+  return `<div class="admin-report"><div class="admin-report-body"><span class="muted"><strong>${esc(r.id)}</strong> · ${formatDateTime(r.createdAt)}</span>${dup ? `<p class="dup-badge">${icon('layers', 13)} ${dup}${r.dupOf ? ` (con ${esc(r.dupOf)})` : ''}${r.dupReason === 'manual' && r.ticketChangedBy ? ` · ${esc(r.ticketChangedBy)}` : ''}</p>` : ''}<p class="description">${esc(r.description)}</p><div class="admin-photos">${(r.photos || []).map((p, i) => `<a href="${esc(p.url)}" target="_blank" rel="noopener"><img src="${esc(p.url)}" alt="Foto ${i + 1}" loading="lazy"></a>`).join('')}</div><dl class="admin-contact"><div><dt>Nombre</dt><dd>${esc(c.firstName)} ${esc(c.lastName)}</dd></div><div><dt>WhatsApp</dt><dd>${esc(c.phone)}</dd></div><div><dt>Relación</dt><dd>${esc(c.relation)} · ${esc(c.sector)}</dd></div><div><dt>Ubicación indicada</dt><dd>${esc(formatAddress(r))} ${mapLink(r)}</dd></div><div><dt>Aceptó términos</dt><dd>${c.consentAt ? formatDateTime(c.consentAt) : '—'} (v${esc(c.termsVersion)})</dd></div></dl>${r.flagCount ? `<p class="admin-flag-count">${icon('flag', 14)} ${r.flagCount} aviso(s) de contenido</p>` : ''}<div class="detail-actions">${canDetach ? `<button class="button outline small" data-detach="${esc(r.id)}">Separar en ticket nuevo</button>` : ''}<button class="text-button danger" data-delete="${esc(r.id)}">Eliminar reporte</button></div></div></div>`;
 }
 
 function flagCard(f) {
-  const r = reports.find((x) => x.id === f.reportId);
-  return `<article class="admin-flag"><div class="admin-flag-head"><span class="status-pill">${icon('flag', 13)} ${esc(f.reason)}</span><span class="muted">${esc(f.id)} · ${formatDateTime(f.createdAt)}</span></div>${f.note ? `<p class="admin-note">“${esc(f.note)}”</p>` : ''}${r ? reportCard(r, { compact: false }) : '<p class="muted">El reporte ya no existe.</p>'}${f.status === 'open' ? `<div class="detail-actions"><button class="button outline small" data-resolve="${esc(f.id)}" data-report="${esc(f.reportId)}">${icon('check', 16)} Mantener reporte y cerrar aviso</button></div>` : `<p class="muted">Resuelto ${f.resolvedAt ? formatDateTime(f.resolvedAt) : ''} ${f.resolvedBy ? `por ${esc(f.resolvedBy)}` : ''}</p>`}</article>`;
+  const t = ticketOfReport(f.reportId);
+  const r = t?.reports.find((x) => x.id === f.reportId);
+  return `<article class="admin-flag"><div class="admin-flag-head"><span class="status-pill">${icon('flag', 13)} ${esc(f.reason)}</span><span class="muted">${t ? `<strong>${esc(t.id)}</strong> · ` : ''}${esc(f.id)} · ${formatDateTime(f.createdAt)}</span></div>${f.note ? `<p class="admin-note">“${esc(f.note)}”</p>` : ''}${r ? reportCard(r) : '<p class="muted">El reporte ya no existe.</p>'}${f.status === 'open' ? `<div class="detail-actions"><button class="button outline small" data-resolve="${esc(f.id)}" data-report="${esc(f.reportId)}">${icon('check', 16)} Mantener reporte y cerrar aviso</button></div>` : `<p class="muted">Resuelto ${f.resolvedAt ? formatDateTime(f.resolvedAt) : ''} ${f.resolvedBy ? `por ${esc(f.resolvedBy)}` : ''}</p>`}</article>`;
 }
 
 async function deleteReport(id) {
   if (!confirm(`¿Eliminar el reporte ${id}? Se borrarán sus fotos, datos de contacto y avisos. No se puede deshacer.`)) return;
   try {
     await api.admin.deleteReport(await idToken(), id);
-    reports = reports.filter((r) => r.id !== id);
-    flags = flags.filter((f) => f.reportId !== id);
-    renderDashboard();
     toast('Reporte eliminado.');
+    await loadDashboard();
   } catch (err) {
     toast(`No se pudo eliminar: ${err.message}`);
+  }
+}
+
+async function detachReport(id) {
+  if (!confirm(`¿Separar el reporte ${id} en un ticket nuevo? Úsalo cuando se unió por error a otro caso.`)) return;
+  try {
+    const { ticketId } = await api.admin.detachReport(await idToken(), id);
+    toast(`El reporte quedó en el ticket nuevo ${ticketId}.`);
+    await loadDashboard();
+  } catch (err) {
+    toast(`No se pudo separar: ${err.message}`);
+  }
+}
+
+async function mergeTicket(from, intoRaw) {
+  const into = String(intoRaw || '').trim().toUpperCase();
+  if (!/^T-\d{4,}$/.test(into)) return toast('Escribe un número de ticket válido, por ejemplo T-0042.');
+  if (into === from) return toast('No puedes unir un ticket consigo mismo.');
+  if (!confirm(`¿Marcar ${from} como duplicado de ${into}? Todos los reportes de ${from} pasarán a ${into}.`)) return;
+  try {
+    const res = await api.admin.mergeTicket(await idToken(), from, into);
+    toast(`${from} unido a ${into} (${res.reports} reporte${res.reports > 1 ? 's' : ''}).`);
+    await loadDashboard();
+  } catch (err) {
+    toast(`No se pudo unir: ${err.message}`);
   }
 }
 

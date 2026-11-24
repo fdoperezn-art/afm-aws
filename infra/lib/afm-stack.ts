@@ -129,8 +129,8 @@ export class AfmStack extends Stack {
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
-      memorySize: 512,
-      timeout: Duration.seconds(15),
+      memorySize: 1024, // más memoria = más CPU para leer las fotos y calcular sus huellas
+      timeout: Duration.seconds(20),
       environment: {
         TABLE_NAME: table.tableName,
         BUCKET_NAME: photos.bucketName,
@@ -204,10 +204,12 @@ export class AfmStack extends Stack {
 
     // Moderación (token de Cognito obligatorio)
     const adminRes = api.root.addResource('admin');
-    const adminReports = adminRes.addResource('reports');
-    adminReports.addMethod('GET', integration, asModerator);
-    const adminReport = adminReports.addResource('{id}');
+    const adminTickets = adminRes.addResource('tickets');
+    adminTickets.addMethod('GET', integration, asModerator);
+    adminTickets.addResource('{ticketId}').addResource('merge').addMethod('POST', integration, asModerator);
+    const adminReport = adminRes.addResource('reports').addResource('{id}');
     adminReport.addMethod('DELETE', integration, asModerator);
+    adminReport.addResource('detach').addMethod('POST', integration, asModerator);
     adminReport.addResource('flags').addResource('{flagId}').addMethod('PATCH', integration, asModerator);
     adminRes.addResource('flags').addMethod('GET', integration, asModerator);
 

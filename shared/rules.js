@@ -5,8 +5,29 @@ import { isInsideConchali, OUTSIDE_MESSAGE } from './geo.js';
 export const TERMS_VERSION = '2026-09-13';
 export const MAX_DESCRIPTION = 500;
 export const MAX_PHOTOS = 2;
-export const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
-export const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+/** Foto original que elige el vecino (se reduce en el teléfono antes de subirla). */
+export const MAX_ORIGINAL_BYTES = 15 * 1024 * 1024;
+export const INPUT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+/** Foto ya reducida que llega al servidor: siempre JPEG. */
+export const MAX_PHOTO_BYTES = 3 * 1024 * 1024;
+export const UPLOAD_TYPE = 'image/jpeg';
+/** Lado mayor de la foto reducida, en píxeles, y calidad JPEG. */
+export const PHOTO_MAX_SIDE = 1600;
+export const PHOTO_QUALITY = 0.82;
+
+// Duplicados: misma foto si la huella perceptual difiere en pocos bits y está cerca.
+export const DUP_HASH_MAX_DISTANCE = 8; // de 64 bits (una foto reenviada suele quedar en 0–6)
+export const DUP_AUTO_MAX_METERS = 500;
+export const DUP_SUGGEST_MAX_METERS = 50; // misma categoría a menos de esto → «posible duplicado»
+
+/** Distancia en metros entre dos puntos (fórmula del semiverseno). */
+export function distanceMeters(a, b) {
+  const rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
 
 export const RELATIONS = ['Vivo en Conchalí', 'Trabajo en Conchalí', 'Estudio en Conchalí', 'Visito Conchalí'];
 export const SECTORS = ['Vivo en este sector', 'Trabajo o estudio aquí', 'Paso por este sector'];

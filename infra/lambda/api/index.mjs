@@ -1,18 +1,28 @@
 // API REST de AFM (detrás de API Gateway). Una sola función con un enrutador simple.
+//
+// Modelo (tabla única de DynamoDB):
+//   Reporte  PK=REPORT#AFM-XXXXXXXX  SK=META            GSI1PK=REPORT  GSI1SK=<fecha>#<id>
+//   Aviso    PK=REPORT#AFM-XXXXXXXX  SK=FLAG#AVISO-...  GSI1PK=FLAG    GSI1SK=<fecha>#<id>
+//   Ticket   PK=TICKET#T-0001        SK=META            GSI1PK=TICKET  GSI1SK=<fecha>#<id>
+//   Contador PK=COUNTER              SK=TICKET          (numeración correlativa de tickets)
+// Cada reporte pertenece a un ticket (atributo ticketId). Un ticket = un caso; varios vecinos pueden
+// reportar el mismo caso. El número de ticket es interno: solo lo ve el equipo de moderación.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
-  CopyObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, S3Client,
+  CopyObjectCommand, DeleteObjectsCommand, GetObjectCommand, S3Client,
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
-  BatchWriteCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand,
+  BatchWriteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import jpeg from 'jpeg-js';
 
 import {
-  FLAG_REASONS, MAX_PHOTO_BYTES, MAX_PHOTOS, PHOTO_TYPES, TERMS_VERSION, validateReport,
+  DUP_AUTO_MAX_METERS, DUP_HASH_MAX_DISTANCE, DUP_SUGGEST_MAX_METERS, FLAG_REASONS, MAX_PHOTO_BYTES, MAX_PHOTOS,
+  TERMS_VERSION, UPLOAD_TYPE, distanceMeters, validateReport,
 } from '../../../shared/rules.js';
 
 const { TABLE_NAME, BUCKET_NAME, ALLOWED_ORIGINS = '', ADMIN_GROUP = 'moderadores' } = process.env;
@@ -20,10 +30,10 @@ const origins = ALLOWED_ORIGINS.split(',').filter(Boolean);
 const s3 = new S3Client({});
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
 
-const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const UPLOAD_KEY_RE = /^uploads\/[0-9a-f-]{36}\.(jpg|png|webp)$/;
+const UPLOAD_KEY_RE = /^uploads\/[0-9a-f-]{36}\.jpg$/;
 const REPORT_ID_RE = /^AFM-[0-9A-F]{8}$/;
 const FLAG_ID_RE = /^AVISO-[0-9A-F]{8}$/;
+const TICKET_ID_RE = /^T-\d{4,}$/;
 const PHOTO_URL_TTL = 3600; // segundos
 const MAX_BODY = 16 * 1024;
 
@@ -35,15 +45,14 @@ class HttpError extends Error {
 }
 
 // ---------- Utilidades ----------
-const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 const shortId = () => randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase();
 const str = (v, max) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
+const byDate = (a, b) => a.createdAt.localeCompare(b.createdAt);
 
 function corsHeaders(event) {
   const origin = event.headers?.origin || event.headers?.Origin;
-  return origin && origins.includes(origin)
-    ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
-    : {};
+  return origin && origins.includes(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {};
 }
 
 function parseBody(event) {
@@ -68,6 +77,81 @@ async function queryAll(params) {
   return items;
 }
 
+const queryType = (type) =>
+  queryAll({
+    TableName: TABLE_NAME,
+    IndexName: 'GSI1',
+    KeyConditionExpression: 'GSI1PK = :t',
+    ExpressionAttributeValues: { ':t': type },
+  });
+
+async function batchDelete(keys) {
+  for (let i = 0; i < keys.length; i += 25) {
+    await db.send(
+      new BatchWriteCommand({
+        RequestItems: { [TABLE_NAME]: keys.slice(i, i + 25).map((Key) => ({ DeleteRequest: { Key } })) },
+      }),
+    );
+  }
+}
+
+// ---------- Huellas de fotos (detección de duplicados) ----------
+/**
+ * Huella perceptual dHash de 64 bits: la imagen se reduce a 9×8 en escala de grises y cada bit indica
+ * si un punto es más claro que su vecino. Sobrevive a reenvíos por WhatsApp, recompresión y cambios de tamaño.
+ * lowDetail = imagen casi uniforme (p. ej. muy oscura): su huella no es confiable para unir casos.
+ */
+function perceptualHash(buffer) {
+  const img = jpeg.decode(buffer, { useTArray: true, formatAsRGBA: true, maxResolutionInMP: 40, maxMemoryUsageInMB: 768 });
+  const W = 9;
+  const H = 8;
+  const sum = new Float64Array(W * H);
+  const count = new Uint32Array(W * H);
+  const { width, height, data } = img;
+  for (let y = 0; y < height; y++) {
+    const cy = Math.min(H - 1, Math.floor((y * H) / height));
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const cell = cy * W + Math.min(W - 1, Math.floor((x * W) / width));
+      sum[cell] += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      count[cell]++;
+    }
+  }
+  const avg = Array.from(sum, (s, i) => s / count[i]);
+  let bits = 0n;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W - 1; x++) bits = (bits << 1n) | (avg[y * W + x] < avg[y * W + x + 1] ? 1n : 0n);
+  }
+  return { dhash: bits.toString(16).padStart(16, '0'), lowDetail: Math.max(...avg) - Math.min(...avg) < 12 };
+}
+
+function hammingDistance(a, b) {
+  let x = BigInt(`0x${a}`) ^ BigInt(`0x${b}`);
+  let n = 0;
+  while (x) {
+    n += Number(x & 1n);
+    x >>= 1n;
+  }
+  return n;
+}
+
+/** Compara las fotos de dos reportes. Devuelve { exact, distance } de su par más parecido. */
+function comparePhotos(hashesA = [], hashesB = []) {
+  let best = { exact: false, distance: 64, reliable: false };
+  for (const a of hashesA) {
+    for (const b of hashesB) {
+      if (a.sha256 === b.sha256) return { exact: true, distance: 0, reliable: true };
+      const distance = hammingDistance(a.dhash, b.dhash);
+      if (distance < best.distance) best = { exact: false, distance, reliable: !a.lowDetail && !b.lowDetail };
+    }
+  }
+  return best;
+}
+
+const isSamePhoto = (cmp, meters) =>
+  cmp.exact || (cmp.reliable && cmp.distance <= DUP_HASH_MAX_DISTANCE && meters <= DUP_AUTO_MAX_METERS);
+
+// ---------- Vistas ----------
 const photoUrls = (keys = []) =>
   Promise.all(
     keys.map(async (key) => ({
@@ -75,24 +159,53 @@ const photoUrls = (keys = []) =>
     })),
   );
 
-/** Vista pública: sin datos de contacto ni token. */
-async function publicView(item) {
-  return {
-    id: item.id,
-    category: item.category,
-    detail: item.detail,
-    lat: item.lat,
-    lng: item.lng,
-    address: item.address,
-    addressParts: item.addressParts,
-    description: item.description,
-    createdAt: item.createdAt,
-    photos: await photoUrls(item.photoKeys),
-  };
+const publicReport = async (r) => ({
+  id: r.id,
+  description: r.description,
+  createdAt: r.createdAt,
+  photos: await photoUrls(r.photoKeys),
+});
+
+const adminReport = async (r) => ({
+  ...(await publicReport(r)),
+  category: r.category,
+  detail: r.detail,
+  lat: r.lat,
+  lng: r.lng,
+  address: r.address,
+  addressParts: r.addressParts,
+  contact: r.contact,
+  flagCount: r.flagCount || 0,
+  dupReason: r.dupReason,
+  dupOf: r.dupOf,
+  ticketChangedBy: r.ticketChangedBy,
+});
+
+/** Agrupa reportes por ticket. El primer reporte del caso define su categoría y ubicación. */
+function groupByTicket(reports) {
+  const groups = new Map();
+  for (const r of [...reports].sort(byDate)) {
+    if (!groups.has(r.ticketId)) groups.set(r.ticketId, []);
+    groups.get(r.ticketId).push(r);
+  }
+  return [...groups.entries()].map(([ticketId, list]) => ({ ticketId, primary: list[0], reports: list }));
 }
 
-async function adminView(item) {
-  return { ...(await publicView(item)), contact: item.contact, flagCount: item.flagCount || 0 };
+/** Caso público: se identifica por su primer reporte (el número de ticket no se publica). */
+async function publicCase({ primary, reports }) {
+  return {
+    id: primary.id,
+    category: primary.category,
+    detail: primary.detail,
+    lat: primary.lat,
+    lng: primary.lng,
+    address: primary.address,
+    addressParts: primary.addressParts,
+    createdAt: primary.createdAt,
+    updatedAt: reports.at(-1).createdAt,
+    reportCount: reports.length,
+    reports: await Promise.all(reports.map(publicReport)),
+  };
 }
 
 const reportKey = (id) => ({ PK: `REPORT#${id}`, SK: 'META' });
@@ -104,7 +217,32 @@ async function getReport(id) {
   return Item;
 }
 
-/** Borra el reporte, sus avisos y sus fotos. */
+/** Crea un ticket nuevo con el siguiente número correlativo. */
+async function newTicket(reportId, createdAt) {
+  const { Attributes } = await db.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: 'COUNTER', SK: 'TICKET' },
+      UpdateExpression: 'ADD #v :one',
+      ExpressionAttributeNames: { '#v': 'value' },
+      ExpressionAttributeValues: { ':one': 1 },
+      ReturnValues: 'UPDATED_NEW',
+    }),
+  );
+  const id = `T-${String(Attributes.value).padStart(4, '0')}`;
+  await db.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        PK: `TICKET#${id}`, SK: 'META', GSI1PK: 'TICKET', GSI1SK: `${createdAt}#${id}`, type: 'ticket',
+        id, createdAt, firstReportId: reportId,
+      },
+    }),
+  );
+  return id;
+}
+
+/** Borra el reporte, sus avisos y sus fotos. Si el ticket queda sin reportes, deja de mostrarse. */
 async function deleteReportCompletely(report) {
   const items = await queryAll({
     TableName: TABLE_NAME,
@@ -112,21 +250,10 @@ async function deleteReportCompletely(report) {
     ExpressionAttributeValues: { ':pk': `REPORT#${report.id}` },
     ProjectionExpression: 'PK, SK',
   });
-  for (let i = 0; i < items.length; i += 25) {
-    await db.send(
-      new BatchWriteCommand({
-        RequestItems: {
-          [TABLE_NAME]: items.slice(i, i + 25).map((k) => ({ DeleteRequest: { Key: { PK: k.PK, SK: k.SK } } })),
-        },
-      }),
-    );
-  }
+  await batchDelete(items.map(({ PK, SK }) => ({ PK, SK })));
   if (report.photoKeys?.length) {
     await s3.send(
-      new DeleteObjectsCommand({
-        Bucket: BUCKET_NAME,
-        Delete: { Objects: report.photoKeys.map((Key) => ({ Key })) },
-      }),
+      new DeleteObjectsCommand({ Bucket: BUCKET_NAME, Delete: { Objects: report.photoKeys.map((Key) => ({ Key })) } }),
     );
   }
 }
@@ -139,34 +266,42 @@ function requireModerator(event) {
 }
 
 // ---------- Rutas públicas ----------
-async function listReports() {
-  const items = await queryAll({
-    TableName: TABLE_NAME,
-    IndexName: 'GSI1',
-    KeyConditionExpression: 'GSI1PK = :t',
-    ExpressionAttributeValues: { ':t': 'REPORT' },
-    ScanIndexForward: false,
-  });
-  return { reports: await Promise.all(items.map(publicView)) };
+async function listCases() {
+  const groups = groupByTicket(await queryType('REPORT'));
+  const cases = await Promise.all(groups.map(publicCase));
+  return { cases: cases.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
 }
 
 async function createUpload(event) {
   const { contentType, size } = parseBody(event);
-  if (!PHOTO_TYPES.includes(contentType)) throw new HttpError(400, 'Usa una foto JPG, PNG o WebP.');
+  if (contentType !== UPLOAD_TYPE) throw new HttpError(400, 'La fotografía debe enviarse en formato JPEG.');
   if (!Number.isInteger(size) || size < 1 || size > MAX_PHOTO_BYTES)
-    throw new HttpError(400, 'La fotografía supera los 5 MB. Elige una más pequeña.');
-  const key = `uploads/${randomUUID()}.${EXT[contentType]}`;
+    throw new HttpError(400, 'La fotografía es demasiado grande. Elige otra.');
+  const key = `uploads/${randomUUID()}.jpg`;
   const { url, fields } = await createPresignedPost(s3, {
     Bucket: BUCKET_NAME,
     Key: key,
     Conditions: [
       ['content-length-range', 1, MAX_PHOTO_BYTES],
-      ['eq', '$Content-Type', contentType],
+      ['eq', '$Content-Type', UPLOAD_TYPE],
     ],
-    Fields: { 'Content-Type': contentType },
+    Fields: { 'Content-Type': UPLOAD_TYPE },
     Expires: 300,
   });
   return { key, url, fields };
+}
+
+/** Lee una foto subida y calcula sus huellas. Falla si no es un JPEG válido. */
+async function inspectUpload(key) {
+  const obj = await s3.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key })).catch(() => null);
+  if (!obj || obj.ContentLength > MAX_PHOTO_BYTES || obj.ContentType !== UPLOAD_TYPE)
+    throw new HttpError(400, 'Las fotografías no son válidas. Vuelve a subirlas.');
+  const buffer = Buffer.from(await obj.Body.transformToByteArray());
+  try {
+    return { sha256: sha256(buffer), ...perceptualHash(buffer) };
+  } catch {
+    throw new HttpError(400, 'No pudimos leer una de las fotografías. Intenta con otra imagen.');
+  }
 }
 
 async function createReport(event) {
@@ -191,20 +326,30 @@ async function createReport(event) {
   if (new Set(photoKeys).size !== photoKeys.length || photoKeys.length > MAX_PHOTOS || !photoKeys.every((k) => UPLOAD_KEY_RE.test(k)))
     throw new HttpError(400, 'Las fotografías no son válidas. Vuelve a subirlas.');
 
-  // Verifica que las fotos se hayan subido de verdad y cumplan los límites.
-  for (const key of photoKeys) {
-    const head = await s3.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: key })).catch(() => null);
-    if (!head || head.ContentLength > MAX_PHOTO_BYTES || !PHOTO_TYPES.includes(head.ContentType))
-      throw new HttpError(400, 'Las fotografías no son válidas. Vuelve a subirlas.');
-  }
+  // Huellas calculadas en el servidor (no se confía en las que pudiera mandar el teléfono).
+  const photoHashes = [];
+  for (const key of photoKeys) photoHashes.push(await inspectUpload(key));
 
   const id = `AFM-${shortId()}`;
   const now = new Date().toISOString();
-  const finalKeys = photoKeys.map((key, i) => `reports/${id}/${i + 1}.${key.split('.').pop()}`);
+  const location = {
+    lat: Math.round(draft.location.lat * 1e6) / 1e6,
+    lng: Math.round(draft.location.lng * 1e6) / 1e6,
+  };
+
+  // ¿Es la misma foto de un caso ya registrado? → se suma a ese ticket.
+  let match = null;
+  for (const other of await queryType('REPORT')) {
+    const cmp = comparePhotos(photoHashes, other.photoHashes);
+    if (!isSamePhoto(cmp, distanceMeters(location, other))) continue;
+    const score = cmp.exact ? -1 : cmp.distance;
+    if (!match || score < match.score) match = { score, report: other, reason: cmp.exact ? 'foto-identica' : 'foto-similar' };
+  }
+  const ticketId = match ? match.report.ticketId : await newTicket(id, now);
+
+  const finalKeys = photoKeys.map((_, i) => `reports/${id}/${i + 1}.jpg`);
   for (const [i, key] of photoKeys.entries()) {
-    await s3.send(
-      new CopyObjectCommand({ Bucket: BUCKET_NAME, CopySource: `${BUCKET_NAME}/${key}`, Key: finalKeys[i] }),
-    );
+    await s3.send(new CopyObjectCommand({ Bucket: BUCKET_NAME, CopySource: `${BUCKET_NAME}/${key}`, Key: finalKeys[i] }));
   }
   await s3.send(new DeleteObjectsCommand({ Bucket: BUCKET_NAME, Delete: { Objects: photoKeys.map((Key) => ({ Key })) } }));
 
@@ -220,16 +365,19 @@ async function createReport(event) {
     GSI1SK: `${now}#${id}`,
     type: 'report',
     id,
+    ticketId,
+    dupReason: match?.reason,
+    dupOf: match?.report.id,
     category: draft.category,
     detail: draft.detail,
-    lat: Math.round(draft.location.lat * 1e6) / 1e6,
-    lng: Math.round(draft.location.lng * 1e6) / 1e6,
+    ...location,
     addressParts,
     address: [[addressParts.street, addressParts.number].filter(Boolean).join(' '), addressParts.neighborhood]
       .filter(Boolean)
       .join(', '),
     description: draft.description.trim(),
     photoKeys: finalKeys,
+    photoHashes,
     createdAt: now,
     flagCount: 0,
     deleteTokenHash: sha256(deleteToken),
@@ -243,14 +391,9 @@ async function createReport(event) {
       termsVersion: TERMS_VERSION,
     },
   };
-  await db.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        { Put: { TableName: TABLE_NAME, Item: item, ConditionExpression: 'attribute_not_exists(PK)' } },
-      ],
-    }),
-  );
-  return { status: 201, body: { report: await publicView(item), deleteToken } };
+  await db.send(new PutCommand({ TableName: TABLE_NAME, Item: item, ConditionExpression: 'attribute_not_exists(PK)' }));
+  // Al vecino no se le informa si su reporte se unió a un caso existente.
+  return { status: 201, body: { report: await publicReport(item), deleteToken } };
 }
 
 async function deleteOwnReport(event, id) {
@@ -301,15 +444,46 @@ async function createFlag(event, reportId) {
 }
 
 // ---------- Rutas de moderación ----------
-async function adminListReports() {
-  const items = await queryAll({
-    TableName: TABLE_NAME,
-    IndexName: 'GSI1',
-    KeyConditionExpression: 'GSI1PK = :t',
-    ExpressionAttributeValues: { ':t': 'REPORT' },
-    ScanIndexForward: false,
-  });
-  return { reports: await Promise.all(items.map(adminView)) };
+/** Sugerencias de «posible duplicado» entre tickets distintos (el moderador decide). */
+function suggestionsFor(group, groups) {
+  const out = [];
+  for (const other of groups) {
+    if (other.ticketId === group.ticketId) continue;
+    let best = null;
+    for (const a of group.reports) {
+      for (const b of other.reports) {
+        const meters = distanceMeters(a, b);
+        const cmp = comparePhotos(a.photoHashes, b.photoHashes);
+        let reason = null;
+        if (cmp.exact || (cmp.reliable && cmp.distance <= DUP_HASH_MAX_DISTANCE)) reason = 'foto parecida';
+        else if (a.category === b.category && meters <= DUP_SUGGEST_MAX_METERS) reason = 'misma categoría y lugar cercano';
+        if (reason && (!best || meters < best.meters)) best = { ticketId: other.ticketId, reason, meters: Math.round(meters) };
+      }
+    }
+    if (best) out.push(best);
+  }
+  return out.sort((a, b) => a.meters - b.meters);
+}
+
+async function adminListTickets() {
+  const groups = groupByTicket(await queryType('REPORT'));
+  const tickets = await Promise.all(
+    groups.map(async (g) => ({
+      id: g.ticketId,
+      category: g.primary.category,
+      detail: g.primary.detail,
+      lat: g.primary.lat,
+      lng: g.primary.lng,
+      address: g.primary.address,
+      addressParts: g.primary.addressParts,
+      createdAt: g.primary.createdAt,
+      updatedAt: g.reports.at(-1).createdAt,
+      reportCount: g.reports.length,
+      reports: await Promise.all(g.reports.map(adminReport)),
+      suggestions: suggestionsFor(g, groups),
+    })),
+  );
+  return { tickets: tickets.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
 }
 
 const flagView = ({ id, reportId, reason, note, createdAt, status, resolvedAt, resolvedBy }) => ({
@@ -317,19 +491,61 @@ const flagView = ({ id, reportId, reason, note, createdAt, status, resolvedAt, r
 });
 
 async function adminListFlags() {
-  const items = await queryAll({
-    TableName: TABLE_NAME,
-    IndexName: 'GSI1',
-    KeyConditionExpression: 'GSI1PK = :t',
-    ExpressionAttributeValues: { ':t': 'FLAG' },
-    ScanIndexForward: false,
-  });
-  return { flags: items.map(flagView) };
+  const items = await queryType('FLAG');
+  return { flags: items.sort(byDate).reverse().map(flagView) };
 }
 
 async function adminDeleteReport(id) {
   await deleteReportCompletely(await getReport(id));
   return { status: 204 };
+}
+
+/** Une el ticket `from` dentro de `into`: todos sus reportes pasan al otro caso. */
+async function adminMergeTicket(event, from, moderator) {
+  const into = String(parseBody(event).into || '').trim().toUpperCase();
+  if (!TICKET_ID_RE.test(from) || !TICKET_ID_RE.test(into)) throw new HttpError(400, 'Número de ticket no válido (ej. T-0042).');
+  if (from === into) throw new HttpError(400, 'No puedes unir un ticket consigo mismo.');
+  const reports = await queryType('REPORT');
+  const moving = reports.filter((r) => r.ticketId === from);
+  if (!moving.length) throw new HttpError(404, `El ticket ${from} no existe o no tiene reportes.`);
+  if (!reports.some((r) => r.ticketId === into)) throw new HttpError(404, `El ticket ${into} no existe o no tiene reportes.`);
+  const now = new Date().toISOString();
+  for (const r of moving) {
+    await db.send(
+      new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: reportKey(r.id),
+        UpdateExpression: 'SET ticketId = :into, dupReason = :manual, ticketChangedBy = :by, ticketChangedAt = :at REMOVE dupOf',
+        ConditionExpression: 'ticketId = :from',
+        ExpressionAttributeValues: { ':into': into, ':from': from, ':manual': 'manual', ':by': moderator, ':at': now },
+      }),
+    );
+  }
+  await db.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: `TICKET#${from}`, SK: 'META' },
+      UpdateExpression: 'SET mergedInto = :into, mergedBy = :by, mergedAt = :at',
+      ExpressionAttributeValues: { ':into': into, ':by': moderator, ':at': now },
+    }),
+  );
+  return { merged: from, into, reports: moving.length };
+}
+
+/** Saca un reporte de su ticket y lo deja como caso nuevo (para corregir una unión equivocada). */
+async function adminDetachReport(id, moderator) {
+  const report = await getReport(id);
+  const now = new Date().toISOString();
+  const ticketId = await newTicket(id, now);
+  await db.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: reportKey(id),
+      UpdateExpression: 'SET ticketId = :t, ticketChangedBy = :by, ticketChangedAt = :at REMOVE dupReason, dupOf',
+      ExpressionAttributeValues: { ':t': ticketId, ':by': moderator, ':at': now },
+    }),
+  );
+  return { report: report.id, ticketId };
 }
 
 async function adminResolveFlag(event, reportId, flagId, moderator) {
@@ -362,7 +578,7 @@ async function route(event) {
   const is = (m, len) => method === m && parts.length === len;
 
   if (parts[0] === 'reports') {
-    if (is('GET', 1)) return listReports();
+    if (is('GET', 1)) return listCases();
     if (is('POST', 1)) return createReport(event);
     if (is('DELETE', 2)) return deleteOwnReport(event, parts[1]);
     if (is('POST', 3) && parts[2] === 'flags') return createFlag(event, parts[1]);
@@ -370,15 +586,22 @@ async function route(event) {
   if (parts[0] === 'uploads' && is('POST', 1)) return createUpload(event);
   if (parts[0] === 'admin') {
     const moderator = requireModerator(event);
+    if (parts[1] === 'tickets') {
+      if (is('GET', 2)) return adminListTickets();
+      if (is('POST', 4) && parts[3] === 'merge') return adminMergeTicket(event, parts[2], moderator);
+    }
     if (parts[1] === 'reports') {
-      if (is('GET', 2)) return adminListReports();
       if (is('DELETE', 3)) return adminDeleteReport(parts[2]);
+      if (is('POST', 4) && parts[3] === 'detach') return adminDetachReport(parts[2], moderator);
       if (is('PATCH', 5) && parts[3] === 'flags') return adminResolveFlag(event, parts[2], parts[4], moderator);
     }
     if (parts[1] === 'flags' && is('GET', 2)) return adminListFlags();
   }
   throw new HttpError(404, 'Ruta no encontrada.');
 }
+
+/** Solo para pruebas locales. */
+export const _test = { perceptualHash, hammingDistance, comparePhotos, isSamePhoto };
 
 export async function handler(event) {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders(event) };

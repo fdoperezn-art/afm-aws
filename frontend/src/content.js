@@ -50,7 +50,7 @@ export const LEGAL = {
     `2. ¿Quién puede reportar?`,
     `Quienes viven, trabajan, estudian o visitan Conchalí y quieren hacer visible un problema de la comuna.`,
     `3. ¿Necesito una fotografía?`,
-    `Sí. Una fotografía ayuda a mostrar mejor lo que está pasando. Puedes añadir hasta dos imágenes JPG, PNG o WebP, de hasta 5 MB cada una.`,
+    `Sí. Una fotografía ayuda a mostrar mejor lo que está pasando. Puedes añadir hasta dos imágenes JPG, PNG, WebP o HEIC, de hasta 15 MB cada una. Las reducimos automáticamente para que se envíen rápido.`,
     `4. ¿Puedo consultar mi reporte después?`,
     `Sí. Puedes consultar los reportes que has realizado desde la sección “Mis reportes”.`,
     `5. ¿Qué significan los números en el mapa?`,

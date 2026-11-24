@@ -4770,3 +4770,30 @@ dialog::backdrop {
     font-size: 9px;
   }
 }
+
+/* Casos con varios reportes de vecinos */
+.case-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--orange, #fd6a02);
+  font-weight: 600;
+}
+.case-report {
+  border-top: 1px solid rgba(127, 127, 127, 0.25);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.case-report-date {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+.case-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
