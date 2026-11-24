@@ -1156,7 +1156,8 @@ button {
   padding: 0 10px;
   font-size: 11px;
 }
-.sidebar > .button svg:last-child {
+/* Solo empuja a la derecha un ícono que va después de otro elemento (no el «+» inicial, que quedaba descentrado). */
+.sidebar > .button svg:last-child:not(:first-child) {
   margin-left: auto;
 }
 .map-panel {
