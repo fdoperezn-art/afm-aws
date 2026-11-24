@@ -7,12 +7,14 @@ import {
   aws_dynamodb as dynamodb,
   aws_lambda as lambda,
   aws_lambda_nodejs as nodejs,
+  aws_iam as iam,
   aws_logs as logs,
   aws_s3 as s3,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
 const ADMIN_GROUP = 'moderadores';
+const TEAM_CODE_PARAM = '/afm/equipo/codigo';
 const LOCAL_DEV_ORIGIN = 'http://localhost:5173';
 /** Dominio propio (DNS en Cloudflare; asociado a Amplify por API, ver README). */
 const CUSTOM_DOMAIN = 'afmconchali.cl';
@@ -35,6 +37,8 @@ export class AfmStack extends Stack {
         { source: `https://www.${CUSTOM_DOMAIN}`, target: `https://${CUSTOM_DOMAIN}`, status: '301' },
         { source: `https://www.${CUSTOM_DOMAIN}/<*>`, target: `https://${CUSTOM_DOMAIN}/<*>`, status: '301' },
         { source: '/admin', target: '/admin/', status: '301' },
+        { source: '/equipo', target: '/equipo/', status: '301' },
+        { source: '/equipo/<*>', target: '/equipo/index.html', status: '404-200' },
         { source: '/admin/<*>', target: '/admin/index.html', status: '404-200' },
         { source: '/<*>', target: '/index.html', status: '404-200' },
       ],
@@ -58,6 +62,7 @@ export class AfmStack extends Stack {
       billing: dynamodb.Billing.onDemand(),
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       deletionProtection: true,
+      timeToLiveAttribute: 'expiresAt', // borra solos los contadores temporales (gratis)
       removalPolicy: RemovalPolicy.RETAIN, // datos ciudadanos: no se borran al eliminar la pila
       globalSecondaryIndexes: [
         {
@@ -142,6 +147,7 @@ export class AfmStack extends Stack {
         BUCKET_NAME: photos.bucketName,
         ALLOWED_ORIGINS: allowedOrigins.join(','),
         ADMIN_GROUP,
+        TEAM_CODE_PARAM,
       },
       logGroup: new logs.LogGroup(this, 'ApiLogs', {
         retention: logs.RetentionDays.ONE_MONTH,
@@ -159,6 +165,14 @@ export class AfmStack extends Stack {
     table.grantReadWriteData(apiFunction);
     photos.grantReadWrite(apiFunction);
     photos.grantDelete(apiFunction);
+    // Huella del código del equipo (/equipo). El parámetro lo crea scripts/set-team-code (no CDK),
+    // para que un despliegue nunca sobrescriba el código vigente.
+    apiFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${TEAM_CODE_PARAM}`],
+      }),
+    );
 
     // ---------- API REST: API Gateway ----------
     const api = new apigw.RestApi(this, 'Api', {
@@ -173,12 +187,15 @@ export class AfmStack extends Stack {
           '/reports/POST': { throttlingRateLimit: 2, throttlingBurstLimit: 5 },
           '/uploads/POST': { throttlingRateLimit: 4, throttlingBurstLimit: 10 },
           '/reports/{id}/flags/POST': { throttlingRateLimit: 2, throttlingBurstLimit: 5 },
+          // Código del equipo: pocos intentos por segundo para que no se pueda adivinar.
+          '/team/check/POST': { throttlingRateLimit: 1, throttlingBurstLimit: 3 },
+          '/team/visits/POST': { throttlingRateLimit: 1, throttlingBurstLimit: 3 },
         },
       },
       defaultCorsPreflightOptions: {
         allowOrigins: allowedOrigins,
         allowMethods: ['GET', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowHeaders: ['Content-Type', 'Authorization', 'X-Delete-Token'],
+        allowHeaders: ['Content-Type', 'Authorization', 'X-Delete-Token', 'X-Team-Code'],
         maxAge: Duration.hours(1),
       },
       endpointConfiguration: { types: [apigw.EndpointType.REGIONAL] },
@@ -218,6 +235,14 @@ export class AfmStack extends Stack {
     adminReport.addResource('detach').addMethod('POST', integration, asModerator);
     adminReport.addResource('flags').addResource('{flagId}').addMethod('PATCH', integration, asModerator);
     adminRes.addResource('flags').addMethod('GET', integration, asModerator);
+    const adminVisits = adminRes.addResource('visits');
+    adminVisits.addMethod('GET', integration, asModerator);
+    adminVisits.addResource('{id}').addMethod('DELETE', integration, asModerator);
+
+    // Equipo (código compartido, validado en la Lambda)
+    const teamRes = api.root.addResource('team');
+    teamRes.addResource('check').addMethod('POST', integration);
+    teamRes.addResource('visits').addMethod('POST', integration);
 
     // ---------- Cabeceras de seguridad del sitio ----------
     const apiOrigin = `https://${api.restApiId}.execute-api.${this.region}.amazonaws.com`;

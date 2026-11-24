@@ -115,12 +115,38 @@ function flagsSheet(flags, tickets) {
   };
 }
 
-/** Genera y descarga el Excel con tickets, reportes y avisos. */
-export async function downloadExcel(tickets, flags) {
+function visitsSheet(visits = []) {
+  const rows = [header(['Visita', 'Fecha de visita', 'Nombre', 'Apellidos', 'Teléfono', 'Dirección', 'Cargo', 'Compromiso', 'Registrado por', 'Latitud', 'Longitud', 'Ingresada'])];
+  for (const v of visits) {
+    rows.push([
+      text(v.id),
+      { type: Date, value: new Date(`${v.visitDate}T00:00:00Z`), format: 'dd/mm/yyyy' },
+      text(v.firstName),
+      text(v.lastNames),
+      text(v.phone),
+      text(v.address),
+      text(v.role),
+      text(v.commitment),
+      text(v.registeredBy),
+      num(v.location?.lat),
+      num(v.location?.lng),
+      date(v.createdAt),
+    ]);
+  }
+  return {
+    sheet: 'Visitas',
+    data: rows,
+    stickyRowsCount: 1,
+    columns: [12, 14, 16, 22, 14, 34, 26, 70, 20, 11, 11, 17].map((width) => ({ width })),
+  };
+}
+
+/** Genera y descarga el Excel con tickets, reportes, avisos y visitas a terreno. */
+export async function downloadExcel(tickets, flags, visits = []) {
   // La librería se carga solo al exportar, para no hacer más lento el panel.
   const { default: writeExcelFile } = await import('write-excel-file/browser');
   const stamp = new Date().toLocaleString('sv-SE').slice(0, 16).replace(' ', '_').replace(':', 'h');
-  await writeExcelFile([reportsSheet(tickets), ticketsSheet(tickets), flagsSheet(flags, tickets)], {
+  await writeExcelFile([reportsSheet(tickets), ticketsSheet(tickets), flagsSheet(flags, tickets), visitsSheet(visits)], {
     fontFamily: 'Calibri',
     fontSize: 11,
   }).toFile(`AFM_reportes_${stamp}.xlsx`);

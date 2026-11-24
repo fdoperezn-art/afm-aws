@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
-// Dos páginas: el mapa ciudadano (/) y el panel de moderación (/admin/).
+// Páginas: el mapa ciudadano (/), el panel de moderación (/admin/) y el registro de visitas del equipo (/equipo/).
 export default defineConfig({
   server: { fs: { allow: ['..'] } }, // permite importar ../shared en desarrollo
   build: {
@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         admin: resolve(__dirname, 'admin/index.html'),
+        equipo: resolve(__dirname, 'equipo/index.html'),
       },
     },
   },

@@ -7,7 +7,8 @@
 //   Contador PK=COUNTER              SK=TICKET          (numeración correlativa de tickets)
 // Cada reporte pertenece a un ticket (atributo ticketId). Un ticket = un caso; varios vecinos pueden
 // reportar el mismo caso. El número de ticket es interno: solo lo ve el equipo de moderación.
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import {
   CopyObjectCommand, DeleteObjectsCommand, GetObjectCommand, S3Client,
 } from '@aws-sdk/client-s3';
@@ -15,7 +16,7 @@ import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
-  BatchWriteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand,
+  BatchWriteCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import jpeg from 'jpeg-js';
@@ -24,8 +25,10 @@ import {
   DUP_AUTO_MAX_METERS, DUP_HASH_MAX_DISTANCE, DUP_SUGGEST_MAX_METERS, FLAG_REASONS, MAX_PHOTO_BYTES, MAX_PHOTOS,
   TERMS_VERSION, UPLOAD_TYPE, distanceMeters, validateReport,
 } from '../../../shared/rules.js';
+import { normalizeVisit, validateVisit } from '../../../shared/visits.js';
 
-const { TABLE_NAME, BUCKET_NAME, ALLOWED_ORIGINS = '', ADMIN_GROUP = 'moderadores' } = process.env;
+const { TABLE_NAME, BUCKET_NAME, ALLOWED_ORIGINS = '', ADMIN_GROUP = 'moderadores', TEAM_CODE_PARAM = '/afm/equipo/codigo' } = process.env;
+const ssm = new SSMClient({});
 const origins = ALLOWED_ORIGINS.split(',').filter(Boolean);
 const s3 = new S3Client({});
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
@@ -571,6 +574,126 @@ async function adminResolveFlag(event, reportId, flagId, moderator) {
   }
 }
 
+
+// ---------- Visitas a terreno (/equipo) ----------
+// El equipo usa un código compartido. Solo se guarda su huella scrypt en Parameter Store
+// (parámetro TEAM_CODE_PARAM, formato "scrypt$N$sal$huella"); el código nunca está en el código fuente.
+const VISIT_ID_RE = /^V-[0-9A-F]{8}$/;
+let teamHashCache = { value: null, at: 0 };
+
+async function teamCodeHash() {
+  if (Date.now() - teamHashCache.at < 5 * 60 * 1000) return teamHashCache.value;
+  try {
+    const { Parameter } = await ssm.send(new GetParameterCommand({ Name: TEAM_CODE_PARAM }));
+    teamHashCache = { value: Parameter?.Value || null, at: Date.now() };
+  } catch (err) {
+    if (err.name !== 'ParameterNotFound') throw err;
+    teamHashCache = { value: null, at: Date.now() };
+  }
+  return teamHashCache.value;
+}
+
+// Límite propio contra intentos de adivinar el código (el throttling de API Gateway es solo aproximado):
+// máximo TEAM_MAX_FAILS fallos por IP en una ventana de 10 minutos. Los contadores expiran solos (TTL).
+const TEAM_MAX_FAILS = 10;
+const TEAM_WINDOW_MS = 10 * 60 * 1000;
+
+function failKey(event) {
+  const ip = event.requestContext?.identity?.sourceIp || 'desconocida';
+  const windowStart = Math.floor(Date.now() / TEAM_WINDOW_MS) * TEAM_WINDOW_MS;
+  return { key: { PK: `RATELIMIT#team#${ip}`, SK: String(windowStart) }, expiresAt: Math.floor((windowStart + 2 * TEAM_WINDOW_MS) / 1000) };
+}
+
+async function requireTeamCode(event) {
+  const { key, expiresAt } = failKey(event);
+  const { Item } = await db.send(new GetCommand({ TableName: TABLE_NAME, Key: key }));
+  if ((Item?.fails || 0) >= TEAM_MAX_FAILS)
+    throw new HttpError(429, 'Demasiados intentos fallidos. Espera 10 minutos e inténtalo de nuevo.');
+
+  const code = String(event.headers?.['x-team-code'] || event.headers?.['X-Team-Code'] || '').trim().toUpperCase();
+  const stored = await teamCodeHash();
+  if (!stored) throw new HttpError(503, 'El formulario del equipo aún no está habilitado.');
+  const [algo, n, salt, hash] = stored.split('$');
+  let ok = false;
+  if (algo === 'scrypt' && code && code.length <= 64) {
+    const expected = Buffer.from(hash, 'base64');
+    const actual = scryptSync(code, Buffer.from(salt, 'base64'), expected.length, { N: Number(n) });
+    ok = timingSafeEqual(actual, expected);
+  }
+  if (!ok) {
+    await db.send(
+      new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: key,
+        UpdateExpression: 'ADD fails :one SET expiresAt = :exp',
+        ExpressionAttributeValues: { ':one': 1, ':exp': expiresAt },
+      }),
+    );
+    throw new HttpError(401, 'Código del equipo incorrecto.');
+  }
+}
+
+async function teamCheck(event) {
+  await requireTeamCode(event);
+  return { ok: true };
+}
+
+async function createVisit(event) {
+  await requireTeamCode(event);
+  const body = parseBody(event);
+  const draft = {
+    firstName: body.firstName,
+    lastNames: body.lastNames,
+    phone: body.phone,
+    address: body.address,
+    role: body.role,
+    commitment: body.commitment,
+    visitDate: body.visitDate,
+    registeredBy: body.registeredBy,
+    location: body.location && body.location.lat != null ? { lat: Number(body.location.lat), lng: Number(body.location.lng) } : null,
+  };
+  // Margen de un día por diferencias de zona horaria entre el teléfono y el servidor.
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const error = validateVisit(draft, { today: tomorrow });
+  if (error) throw new HttpError(400, error);
+  const visit = normalizeVisit(draft);
+  const id = `V-${shortId()}`;
+  const createdAt = new Date().toISOString();
+  await db.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        PK: `VISIT#${id}`, SK: 'META', GSI1PK: 'VISIT', GSI1SK: `${visit.visitDate}#${createdAt}#${id}`, type: 'visit',
+        id, ...visit, createdAt,
+      },
+      ConditionExpression: 'attribute_not_exists(PK)',
+    }),
+  );
+  return { status: 201, body: { visit: { id, visitDate: visit.visitDate, createdAt } } };
+}
+
+const visitView = ({ id, firstName, lastNames, phone, address, role, commitment, visitDate, registeredBy, location, createdAt }) => ({
+  id, firstName, lastNames, phone, address, role, commitment, visitDate, registeredBy, location, createdAt,
+});
+
+async function adminListVisits() {
+  const items = await queryType('VISIT');
+  return { visits: items.map(visitView).sort((a, b) => b.visitDate.localeCompare(a.visitDate) || b.createdAt.localeCompare(a.createdAt)) };
+}
+
+async function adminDeleteVisit(id) {
+  if (!VISIT_ID_RE.test(id || '')) throw new HttpError(404, 'La visita no existe.');
+  try {
+    await db.send(
+      new DeleteCommand({ TableName: TABLE_NAME, Key: { PK: `VISIT#${id}`, SK: 'META' }, ConditionExpression: 'attribute_exists(PK)' }),
+    );
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') throw new HttpError(404, 'La visita no existe.');
+    throw err;
+  }
+  return { status: 204 };
+}
+
 // ---------- Enrutador ----------
 async function route(event) {
   const method = event.httpMethod;
@@ -584,6 +707,10 @@ async function route(event) {
     if (is('POST', 3) && parts[2] === 'flags') return createFlag(event, parts[1]);
   }
   if (parts[0] === 'uploads' && is('POST', 1)) return createUpload(event);
+  if (parts[0] === 'team') {
+    if (is('POST', 2) && parts[1] === 'check') return teamCheck(event);
+    if (is('POST', 2) && parts[1] === 'visits') return createVisit(event);
+  }
   if (parts[0] === 'admin') {
     const moderator = requireModerator(event);
     if (parts[1] === 'tickets') {
@@ -596,6 +723,10 @@ async function route(event) {
       if (is('PATCH', 5) && parts[3] === 'flags') return adminResolveFlag(event, parts[2], parts[4], moderator);
     }
     if (parts[1] === 'flags' && is('GET', 2)) return adminListFlags();
+    if (parts[1] === 'visits') {
+      if (is('GET', 2)) return adminListVisits();
+      if (is('DELETE', 3)) return adminDeleteVisit(parts[2]);
+    }
   }
   throw new HttpError(404, 'Ruta no encontrada.');
 }

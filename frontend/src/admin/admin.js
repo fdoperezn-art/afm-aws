@@ -25,6 +25,7 @@ Amplify.configure({
 let tab = 'resumen';
 let tickets = [];
 let flags = [];
+let visits = [];
 let filterText = '';
 
 const app = $('#app');
@@ -137,7 +138,7 @@ async function loadDashboard() {
   shell('<p class="muted admin-loading">Cargando…</p>');
   try {
     const token = await idToken();
-    [tickets, flags] = await Promise.all([api.admin.tickets(token), api.admin.flags(token)]);
+    [tickets, flags, visits] = await Promise.all([api.admin.tickets(token), api.admin.flags(token), api.admin.visits(token)]);
     renderDashboard();
   } catch (err) {
     if (err instanceof api.ApiError && err.status === 401) {
@@ -162,8 +163,8 @@ function renderDashboard() {
   const reportCount = tickets.reduce((n, t) => n + t.reportCount, 0);
   const suggested = tickets.filter((t) => t.suggestions.length).length;
   shell(`<div class="section-title"><div><span class="eyebrow muted">EQUIPO AFM</span><h1>Moderación<span class="orange-text">.</span></h1><p class="muted">${tickets.length} tickets · ${reportCount} reportes de vecinos${suggested ? ` · <strong class="orange-text">${suggested} con posibles duplicados</strong>` : ''}</p></div></div>
-    <div class="admin-tabs" role="tablist"><button role="tab" data-tab="resumen" aria-selected="${tab === 'resumen'}">${icon('layers', 16)} Resumen</button><button role="tab" data-tab="tickets" aria-selected="${tab === 'tickets'}">${icon('reports', 16)} Tickets <span>${tickets.length}</span></button><button role="tab" data-tab="flags" aria-selected="${tab === 'flags'}">${icon('flag', 16)} Avisos abiertos <span>${openFlags.length}</span></button><button role="tab" data-tab="history" aria-selected="${tab === 'history'}">${icon('check', 16)} Avisos resueltos <span>${flags.length - openFlags.length}</span></button></div>
-    ${tab === 'tickets' ? `<label class="search-field admin-search">${icon('search', 18)}<input id="ticket-filter" placeholder="Buscar por ticket (T-0042), calle o problema" value="${esc(filterText)}"></label>` : ''}
+    <div class="admin-tabs" role="tablist"><button role="tab" data-tab="resumen" aria-selected="${tab === 'resumen'}">${icon('layers', 16)} Resumen</button><button role="tab" data-tab="tickets" aria-selected="${tab === 'tickets'}">${icon('reports', 16)} Tickets <span>${tickets.length}</span></button><button role="tab" data-tab="flags" aria-selected="${tab === 'flags'}">${icon('flag', 16)} Avisos abiertos <span>${openFlags.length}</span></button><button role="tab" data-tab="history" aria-selected="${tab === 'history'}">${icon('check', 16)} Avisos resueltos <span>${flags.length - openFlags.length}</span></button><button role="tab" data-tab="visits" aria-selected="${tab === 'visits'}">${icon('map-pin', 16)} Visita a terreno <span>${visits.length}</span></button></div>
+    ${tab === 'tickets' || tab === 'visits' ? `<label class="search-field admin-search">${icon('search', 18)}<input id="ticket-filter" placeholder="${tab === 'visits' ? 'Buscar por nombre, cargo, dirección o compromiso' : 'Buscar por ticket (T-0042), calle o problema'}" value="${esc(filterText)}"></label>` : ''}
     <div id="admin-content"></div>`);
   $('#admin-actions').innerHTML = `<button class="button orange small" id="export-excel">${icon('download', 16)} Descargar Excel</button><button class="button outline small" id="reload">${icon('refresh', 16)} Actualizar</button><button class="button black small" id="logout">${icon('log-out', 16)} Salir</button>`;
   $('#reload').onclick = loadDashboard;
@@ -171,7 +172,7 @@ function renderDashboard() {
     const btn = $('#export-excel');
     btn.disabled = true;
     try {
-      await downloadExcel(tickets, flags);
+      await downloadExcel(tickets, flags, visits);
       toast('Excel descargado. Contiene datos personales: guárdalo en un lugar seguro.');
     } catch {
       toast('No se pudo generar el Excel. Inténtalo otra vez.');
@@ -186,6 +187,7 @@ function renderDashboard() {
   $$('[data-tab]').forEach(
     (b) =>
       (b.onclick = () => {
+        if (tab !== b.dataset.tab) filterText = '';
         tab = b.dataset.tab;
         renderDashboard();
       }),
@@ -213,6 +215,7 @@ async function renderContent() {
     });
     return;
   }
+  if (tab === 'visits') return renderVisits(content);
   if (tab === 'tickets') {
     const list = tickets.filter(matchesFilter);
     content.innerHTML = list.length
@@ -308,6 +311,44 @@ async function resolveFlag(reportId, flagId) {
     toast('Aviso cerrado.');
   } catch (err) {
     toast(`No se pudo cerrar el aviso: ${err.message}`);
+  }
+}
+
+
+// ---------- Visitas a terreno ----------
+function matchesVisit(v) {
+  const q = fold(filterText.trim());
+  if (!q) return true;
+  return fold(`${v.id} ${v.firstName} ${v.lastNames} ${v.role} ${v.address} ${v.commitment} ${v.registeredBy || ''}`).includes(q);
+}
+
+const visitDateText = (d) => d.split('-').reverse().join('-');
+
+function visitCard(v) {
+  const map = v.location
+    ? ` · <a href="https://www.openstreetmap.org/?mlat=${v.location.lat}&mlon=${v.location.lng}#map=18/${v.location.lat}/${v.location.lng}" target="_blank" rel="noopener">ver en mapa</a>`
+    : '';
+  return `<article class="admin-report visit-card">${icon('map-pin', 22)}<div class="admin-report-body"><span class="muted"><strong>${esc(v.id)}</strong> · Visita del ${visitDateText(v.visitDate)}${v.registeredBy ? ` · registrada por ${esc(v.registeredBy)}` : ''}</span><h3>${esc(v.firstName)} ${esc(v.lastNames)}</h3><p class="muted">${esc(v.role)}</p><dl class="admin-contact"><div><dt>Teléfono</dt><dd>${esc(v.phone)}</dd></div><div><dt>Dirección</dt><dd>${esc(v.address)}${map}</dd></div></dl><p class="visit-commitment"><strong>Compromiso:</strong> ${esc(v.commitment)}</p><div class="detail-actions"><button class="text-button danger" data-delete-visit="${esc(v.id)}">Eliminar registro</button></div></div></article>`;
+}
+
+function renderVisits(content) {
+  const list = visits.filter(matchesVisit);
+  const withPoint = visits.filter((v) => v.location).length;
+  content.innerHTML = `<p class="muted">${visits.length} visita${visits.length === 1 ? '' : 's'} registrada${visits.length === 1 ? '' : 's'} · ${withPoint} con punto en el mapa. El equipo las registra en <strong>/equipo</strong> con el código compartido.</p>${
+    list.length ? list.map(visitCard).join('') : empty(visits.length ? 'Ninguna visita coincide con la búsqueda.' : 'Aún no hay visitas registradas.')
+  }`;
+  $$('[data-delete-visit]', content).forEach((b) => (b.onclick = () => deleteVisit(b.dataset.deleteVisit)));
+}
+
+async function deleteVisit(id) {
+  if (!confirm(`¿Eliminar el registro de visita ${id}? No se puede deshacer.`)) return;
+  try {
+    await api.admin.deleteVisit(await idToken(), id);
+    visits = visits.filter((v) => v.id !== id);
+    toast('Registro eliminado.');
+    renderDashboard();
+  } catch (err) {
+    toast(`No se pudo eliminar: ${err.message}`);
   }
 }
 

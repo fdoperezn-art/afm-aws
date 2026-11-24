@@ -52,10 +52,18 @@ export const deleteOwnReport = (id, deleteToken) =>
 export const flagReport = (id, flag) =>
   request(`/reports/${encodeURIComponent(id)}/flags`, { method: 'POST', body: flag });
 
+// --- Equipo (código compartido) ---
+export const team = {
+  check: (code) => request('/team/check', { method: 'POST', body: {}, headers: { 'X-Team-Code': code } }),
+  createVisit: (code, visit) => request('/team/visits', { method: 'POST', body: visit, headers: { 'X-Team-Code': code } }),
+};
+
 // --- Rutas de moderación (requieren sesión de Cognito) ---
 export const admin = {
   tickets: (token) => request('/admin/tickets', { token }).then((d) => d.tickets),
   flags: (token) => request('/admin/flags', { token }).then((d) => d.flags),
+  visits: (token) => request('/admin/visits', { token }).then((d) => d.visits),
+  deleteVisit: (token, id) => request(`/admin/visits/${encodeURIComponent(id)}`, { method: 'DELETE', token }),
   deleteReport: (token, id) => request(`/admin/reports/${encodeURIComponent(id)}`, { method: 'DELETE', token }),
   detachReport: (token, id) =>
     request(`/admin/reports/${encodeURIComponent(id)}/detach`, { method: 'POST', token }),

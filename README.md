@@ -53,6 +53,8 @@ sus metadatos EXIF, incluida la ubicación GPS.
 | POST | `/reports` | Pública: crea el reporte (y lo asigna a un ticket); devuelve un `deleteToken` |
 | DELETE | `/reports/{id}` | Quien lo creó (cabecera `X-Delete-Token`) |
 | POST | `/reports/{id}/flags` | Pública: aviso de contenido |
+| POST | `/team/check` · `/team/visits` | Equipo (cabecera `X-Team-Code`) |
+| GET | `/admin/visits` · DELETE `/admin/visits/{id}` | Moderadores |
 | GET | `/admin/tickets` · `/admin/flags` | Moderadores (incluye datos de contacto y sugerencias de duplicado) |
 | POST | `/admin/tickets/{ticketId}/merge` | Moderadores: `{"into":"T-0042"}` |
 | POST | `/admin/reports/{id}/detach` | Moderadores: saca el reporte a un ticket nuevo |
@@ -92,6 +94,25 @@ cd infra && npx cdk deploy AfmCiStack        # crea el proveedor OIDC y el rol
 Luego, en GitHub: *Settings → Secrets and variables → Actions → Variables → New repository variable*
 `AWS_DEPLOY_ROLE_ARN` = el valor `DeployRoleArn` que muestra el comando anterior.
 Mientras esa variable no exista, el flujo no hace nada.
+
+## Visitas a terreno (/equipo)
+
+Página no enlazada desde el sitio (`https://afmconchali.cl/equipo/`, con `noindex`) para que el equipo
+registre reuniones y visitas a terreno: nombre, apellidos, teléfono, dirección, cargo, compromiso, fecha
+de visita, «registrado por» (opcional) y punto en el mapa (opcional). Los registros solo se ven en el panel
+de moderación, pestaña **«Visita a terreno»**, y se incluyen en el Excel (hoja «Visitas»).
+
+- **Acceso:** código compartido del equipo. Solo permite registrar visitas; no da acceso a reportes
+  ni a datos de vecinos. La API guarda únicamente su huella scrypt en Parameter Store
+  (`/afm/equipo/codigo`, nivel estándar, gratis); el código no está en el repositorio.
+- **Cambiar el código** (si se filtra o alguien deja el equipo):
+  ```bash
+  cd infra && node scripts/set-team-code.mjs
+  ```
+  Muestra el código nuevo una vez; el anterior deja de servir en máximo 5 minutos.
+- **Protección contra adivinar el código:** además del throttling de API Gateway (aproximado), la
+  Lambda bloquea por 10 minutos una IP con 10 intentos fallidos (contadores con TTL en DynamoDB).
+  Con ~60 bits de entropía, adivinarlo no es viable aunque se usen muchas IPs.
 
 ## Dominio propio
 

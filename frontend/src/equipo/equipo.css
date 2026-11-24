@@ -1,0 +1,51 @@
+/* Página del equipo (/equipo). Usa las variables y clases de styles.css y admin.css. */
+.team-main {
+  max-width: 760px;
+}
+.team-form {
+  display: grid;
+  gap: 16px;
+}
+.team-form fieldset {
+  border: 1px solid var(--line);
+  background: #161513;
+  padding: 16px;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.team-form legend {
+  padding: 0 6px;
+  font: 700 15px/1 Barlow, sans-serif;
+  color: var(--orange);
+}
+.team-form .field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.team-form .field-row > div,
+.team-form fieldset > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.team-form input[type='date'] {
+  color-scheme: dark;
+}
+.team-map-wrap #visit-map {
+  height: 300px;
+  border: 1px solid var(--line);
+}
+.team-done {
+  text-align: center;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+}
+@media (max-width: 640px) {
+  .team-form .field-row {
+    grid-template-columns: 1fr;
+  }
+}

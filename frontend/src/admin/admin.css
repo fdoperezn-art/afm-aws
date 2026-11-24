@@ -508,3 +508,16 @@
     display: none;
   }
 }
+
+/* Visitas a terreno */
+.visit-card > svg {
+  flex: none;
+  color: var(--orange);
+  margin-top: 4px;
+}
+.visit-commitment {
+  white-space: pre-line;
+  padding: 10px 12px;
+  background: #0d0d0c;
+  border-left: 3px solid var(--line);
+}
