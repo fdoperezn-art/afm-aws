@@ -18,6 +18,8 @@ const ci = new AfmCiStack(app, 'AfmCiStack', {
   env,
   description: 'AFM · despliegue automático desde GitHub Actions (OIDC)',
   repository: 'fdoperezn-art/afm-aws',
+  ownerId: '360792653',
+  repositoryId: '1470524720',
   branch: 'main',
   terminationProtection: true,
 });

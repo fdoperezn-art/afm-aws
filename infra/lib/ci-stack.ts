@@ -4,6 +4,12 @@ import { Construct } from 'constructs';
 export interface CiStackProps extends StackProps {
   /** Repositorio de GitHub, p. ej. "dueño/repo". */
   repository: string;
+  /**
+   * Identificadores numéricos fijos del dueño y del repositorio en GitHub. GitHub los incluye en el
+   * token OIDC (`repo:dueño@ID/repo@ID:…`) y evitan que otro repositorio con el mismo nombre pueda desplegar.
+   */
+  ownerId: string;
+  repositoryId: string;
   /** Rama que puede desplegar. */
   branch: string;
 }
@@ -22,6 +28,7 @@ export class AfmCiStack extends Stack {
       clientIds: ['sts.amazonaws.com'],
     });
 
+    const [owner, repo] = props.repository.split('/');
     const role = new iam.Role(this, 'DeployRole', {
       roleName: 'afm-github-deploy',
       description: `Despliegue de AFM desde ${props.repository}@${props.branch}`,
@@ -29,7 +36,7 @@ export class AfmCiStack extends Stack {
       assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
         StringEquals: {
           'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-          'token.actions.githubusercontent.com:sub': `repo:${props.repository}:ref:refs/heads/${props.branch}`,
+          'token.actions.githubusercontent.com:sub': `repo:${owner}@${props.ownerId}/${repo}@${props.repositoryId}:ref:refs/heads/${props.branch}`,
         },
       }),
     });
