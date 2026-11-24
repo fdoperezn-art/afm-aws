@@ -8,6 +8,7 @@ import './admin.css';
 
 import { categoryById } from '../../../shared/rules.js';
 import * as api from '../lib/api.js';
+import { downloadExcel } from './export.js';
 import { formatAddress } from '../lib/address.js';
 import { $, $$, brand, esc, fold, formatDateTime, toast } from '../lib/dom.js';
 import { icon, roadSign } from '../lib/icons.js';
@@ -164,8 +165,20 @@ function renderDashboard() {
     <div class="admin-tabs" role="tablist"><button role="tab" data-tab="tickets" aria-selected="${tab === 'tickets'}">${icon('reports', 16)} Tickets <span>${tickets.length}</span></button><button role="tab" data-tab="flags" aria-selected="${tab === 'flags'}">${icon('flag', 16)} Avisos abiertos <span>${openFlags.length}</span></button><button role="tab" data-tab="history" aria-selected="${tab === 'history'}">${icon('check', 16)} Avisos resueltos <span>${flags.length - openFlags.length}</span></button></div>
     ${tab === 'tickets' ? `<label class="search-field admin-search">${icon('search', 18)}<input id="ticket-filter" placeholder="Buscar por ticket (T-0042), calle o problema" value="${esc(filterText)}"></label>` : ''}
     <div id="admin-content"></div>`);
-  $('#admin-actions').innerHTML = `<button class="button outline small" id="reload">${icon('refresh', 16)} Actualizar</button><button class="button black small" id="logout">${icon('log-out', 16)} Salir</button>`;
+  $('#admin-actions').innerHTML = `<button class="button orange small" id="export-excel">${icon('download', 16)} Descargar Excel</button><button class="button outline small" id="reload">${icon('refresh', 16)} Actualizar</button><button class="button black small" id="logout">${icon('log-out', 16)} Salir</button>`;
   $('#reload').onclick = loadDashboard;
+  $('#export-excel').onclick = async () => {
+    const btn = $('#export-excel');
+    btn.disabled = true;
+    try {
+      await downloadExcel(tickets, flags);
+      toast('Excel descargado. Contiene datos personales: guárdalo en un lugar seguro.');
+    } catch {
+      toast('No se pudo generar el Excel. Inténtalo otra vez.');
+    } finally {
+      btn.disabled = false;
+    }
+  };
   $('#logout').onclick = async () => {
     await signOut();
     renderLogin();

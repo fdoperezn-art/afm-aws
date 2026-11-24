@@ -12,7 +12,8 @@
     "aws-amplify": "6.22.2",
     "leaflet": "1.9.4",
     "leaflet.markercluster": "1.5.3",
-    "lucide": "0.468.0"
+    "lucide": "0.468.0",
+    "write-excel-file": "4.1.1"
   },
   "devDependencies": {
     "vite": "5.4.11"
