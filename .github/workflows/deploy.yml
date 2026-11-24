@@ -1,0 +1,52 @@
+# Despliegue automático de AFM: cada push a main actualiza la infraestructura (CDK) y publica el sitio en Amplify.
+# Usa OIDC: GitHub no guarda claves de AWS. Se activa cuando la variable del repositorio
+# AWS_DEPLOY_ROLE_ARN existe (Settings → Secrets and variables → Actions → Variables).
+name: Desplegar en AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # para pedir credenciales temporales a AWS
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_REGION: us-east-2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            infra/package-lock.json
+            frontend/package-lock.json
+
+      - name: Credenciales temporales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+
+      - name: Instalar dependencias de la infraestructura
+        working-directory: infra
+        run: npm ci
+
+      - name: Desplegar infraestructura (CDK)
+        working-directory: infra
+        run: npx cdk deploy AfmStack --require-approval never
+
+      - name: Publicar el sitio en Amplify
+        run: ./infra/scripts/deploy-frontend.sh

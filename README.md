@@ -56,6 +56,20 @@ npx cdk deploy AfmStack                               # infraestructura
 
 La primera vez en una cuenta/Región nueva: `npx cdk bootstrap aws://<cuenta>/us-east-2`.
 
+## Despliegue automático (GitHub Actions)
+
+Cada push a `main` ejecuta `.github/workflows/deploy.yml`: despliega la infraestructura y publica el sitio.
+No guarda claves de AWS: usa OIDC con el rol `afm-github-deploy` (pila `AfmCiStack`), que solo acepta
+pushes a `main` de `fdoperezn-art/afm-aws`. Activación (una sola vez):
+
+```bash
+cd infra && npx cdk deploy AfmCiStack        # crea el proveedor OIDC y el rol
+```
+
+Luego, en GitHub: *Settings → Secrets and variables → Actions → Variables → New repository variable*
+`AWS_DEPLOY_ROLE_ARN` = el valor `DeployRoleArn` que muestra el comando anterior.
+Mientras esa variable no exista, el flujo no hace nada.
+
 ## Crear un moderador
 
 Cognito le envía un correo con una contraseña temporal. En el primer ingreso a `/admin/`
