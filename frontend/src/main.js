@@ -64,7 +64,7 @@ $('#app').innerHTML = `
       <section id="map-section" class="workspace">
         <aside class="sidebar">
           <div class="sidebar-heading"><div><span class="eyebrow muted">EL BARRIO, EN EL MAPA</span><h2>¿Qué está pasando?</h2></div>${icon('arrow-up-right', 25)}</div>
-          <label class="search-field">${icon('search', 18)}<input id="report-search" placeholder="Buscar por calle o problema" aria-label="Buscar reportes por calle o problema"><kbd>/</kbd></label>
+          <label class="search-field">${icon('search', 18)}<input id="report-search" placeholder="Buscar por problema" aria-label="Buscar reportes por problema o categoría"><kbd>/</kbd></label>
           <div class="filter-heading"><span>Filtrar por categoría</span><button id="clear-filter">Limpiar búsqueda</button></div>
           <div class="filter-actions"><button id="show-all">Mostrar todas</button><button id="hide-all">Ocultar todas</button></div>
           <div id="category-filters" class="category-filters"></div>
@@ -146,11 +146,11 @@ function filteredReports() {
   return allReports().filter(
     (r) =>
       visibleCategories.has(r.category) &&
-      fold(`${formatAddress(r)} ${r.detail} ${categoryById(r.category).name}`).includes(q),
+      fold(`${r.detail} ${categoryById(r.category).name}`).includes(q),
   );
 }
 
-const recentReports = () => [...cases].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
+const recentReports = () => cases.slice(0, 6); // la API los entrega del más reciente al más antiguo
 
 function renderFilters() {
   const focused = document.activeElement?.dataset.category;
@@ -184,6 +184,16 @@ function initMainMap() {
       L.divIcon({ className: 'cluster-icon', html: `<span>${cluster.getChildCount()}</span>`, iconSize: [42, 42] }),
   }).addTo(mainMap);
   refresh();
+  // Tocar un lugar vacío del mapa abre «Nuevo reporte» con ese punto ya marcado.
+  // Si el toque solo cerró una vista previa abierta, no se abre el formulario.
+  let popupClosedAt = 0;
+  mainMap.on('popupclose', () => (popupClosedAt = Date.now()));
+  mainMap.on('click', (e) => {
+    if (Date.now() - popupClosedAt < 400) return;
+    const { lat, lng } = e.latlng;
+    if (!isInsideConchali(lat, lng)) return toast(OUTSIDE_MESSAGE);
+    startWizard('', { lat, lng });
+  });
   requestAnimationFrame(() => {
     mainMap.invalidateSize();
     mainMap.fitBounds(BOUNDS, { padding: [25, 25] });
@@ -219,7 +229,7 @@ function refresh() {
   $('#map-empty').hidden = visible.length !== 0;
   $('#my-count').textContent = mine.myReports().length;
   $('#citizen-count').textContent = totalReports().toLocaleString('es-CL');
-  $('#map-mode-note').innerHTML = `${icon('info', 14)} ${showExamples ? 'Ejemplos activados · No son reclamos reales' : 'Reportes ciudadanos publicados'}`;
+  $('#map-mode-note').innerHTML = `${icon('info', 14)} ${showExamples ? 'Ejemplos activados · No son reclamos reales' : 'Toca el mapa para reportar en ese lugar'}`;
   renderFilters();
   renderRecent();
 }
@@ -231,12 +241,12 @@ const neighborsLine = (c) =>
 
 function previewHtml(r) {
   const cat = categoryById(r.category);
-  return `<article class="report-preview"><span class="preview-category">${icon(cat.icon, 15)} ${esc(cat.name)}</span><h3>${esc(r.detail)}</h3>${photoUrl(r) ? `<img src="${esc(photoUrl(r))}" alt="Fotografía del problema reportado">` : `<div class="preview-no-photo">${icon('camera', 26)} Ejemplo sin fotografía</div>`}<p>${icon('map-pin', 14)} ${esc(formatAddress(r))}</p><p>${icon('clock', 14)} ${formatDate(r.createdAt)}</p>${neighborsLine(r)}${r.demo ? '<span class="preview-demo">REPORTE DE EJEMPLO</span>' : ''}<button class="preview-open" data-report="${esc(r.id)}">VER REPORTE ${icon('arrow-right', 17)}</button></article>`;
+  return `<article class="report-preview"><span class="preview-category">${icon(cat.icon, 15)} ${esc(cat.name)}</span><h3>${esc(r.detail)}</h3>${photoUrl(r) ? `<img src="${esc(photoUrl(r))}" alt="Fotografía del problema reportado">` : `<div class="preview-no-photo">${icon('camera', 26)} Ejemplo sin fotografía</div>`}${neighborsLine(r)}${r.demo ? '<span class="preview-demo">REPORTE DE EJEMPLO</span>' : ''}<button class="preview-open" data-report="${esc(r.id)}">VER REPORTE ${icon('arrow-right', 17)}</button></article>`;
 }
 
 function cardHtml(r) {
   const cat = categoryById(r.category);
-  return `<button class="report-card" data-report="${esc(r.id)}">${roadSign(cat.icon)}<span class="report-card-body"><span class="report-card-meta">${esc(cat.name)}<span>${r.demo ? 'EJEMPLO' : caseCount(r) > 1 ? `${caseCount(r)} VECINOS` : 'CIUDADANO'}</span></span><strong>${esc(r.detail)}</strong><span class="report-address">${icon('map-pin', 13)} ${esc(formatAddress(r))}</span><span class="report-card-date">${formatDate(r.createdAt)}</span></span>${photoUrl(r) ? `<img class="report-thumbnail" src="${esc(photoUrl(r))}" alt="Fotografía del problema" loading="lazy">` : icon('arrow-up-right', 19)}</button>`;
+  return `<button class="report-card" data-report="${esc(r.id)}">${roadSign(cat.icon)}<span class="report-card-body"><span class="report-card-meta">${esc(cat.name)}<span>${r.demo ? 'EJEMPLO' : caseCount(r) > 1 ? `${caseCount(r)} VECINOS` : 'CIUDADANO'}</span></span><strong>${esc(r.detail)}</strong></span>${photoUrl(r) ? `<img class="report-thumbnail" src="${esc(photoUrl(r))}" alt="Fotografía del problema" loading="lazy">` : icon('arrow-up-right', 19)}</button>`;
 }
 
 function renderRecent() {
@@ -283,7 +293,7 @@ function renderMyReports() {
 // ---------- Detalle de un reporte ----------
 function reportBlock(c, r, many) {
   const own = !c.demo && mine.isMine(r.id);
-  return `<section class="case-report">${many ? `<p class="muted case-report-date">${icon('user', 14)} Reporte del ${formatDate(r.createdAt)}${own ? ' · <strong>tu reporte</strong>' : ''}</p>` : ''}<p class="description">${esc(r.description)}</p><div class="report-photos">${(r.photos || []).map((p, i) => `<img src="${esc(p.url)}" alt="Fotografía ${i + 1} del problema reportado">`).join('')}</div>${c.demo ? '' : `<div class="case-report-actions"><button class="text-button content-flag-button" data-flag="${esc(r.id)}">&#9873; Reportar contenido</button>${own ? `<button class="text-button danger" data-delete-own="${esc(r.id)}">Eliminar mi reporte</button>` : ''}</div>`}</section>`;
+  return `<section class="case-report">${many && own ? `<p class="muted case-report-date">${icon('user', 14)} <strong>Tu reporte</strong></p>` : ''}<div class="report-photos">${(r.photos || []).map((p, i) => `<img src="${esc(p.url)}" alt="Fotografía ${i + 1} del problema reportado">`).join('')}</div>${c.demo ? '' : `<div class="case-report-actions"><button class="text-button content-flag-button" data-flag="${esc(r.id)}">&#9873; Reportar contenido</button>${own ? `<button class="text-button danger" data-delete-own="${esc(r.id)}">Eliminar mi reporte</button>` : ''}</div>`}</section>`;
 }
 
 function openReport(c) {
@@ -291,7 +301,7 @@ function openReport(c) {
   const list = caseReports(c);
   const many = list.length > 1;
   openDialog(
-    `${dialogHeader(c.demo ? 'Reporte de ejemplo' : 'Detalle del reporte', esc(c.id))}<div class="dialog-body report-detail"><div class="report-detail-title">${roadSign(cat.icon)}<div><span class="muted">${esc(cat.name)}</span><h3>${esc(c.detail)}</h3></div></div><p class="report-address">${icon('map-pin', 17)} ${esc(formatAddress(c))}</p><p class="muted">${formatDate(c.createdAt)}</p>${many ? `<p class="case-count">${icon('user', 16)} <strong>${list.length} vecinos</strong> reportaron este problema</p>` : ''}${list.map((r) => reportBlock(c, r, many)).join('')}<div class="local-notice">${icon('info', 20)} ${c.demo ? 'Datos ficticios para mostrar cómo funciona AFM. No es un reclamo real.' : 'Reporte ciudadano publicado en AFM. No se ha enviado a la municipalidad.'}</div><div class="detail-actions"><button class="button orange" id="see-location">${icon('map', 17)} Ver ubicación</button>${c.demo ? '' : `<button class="button outline" id="export-report">${icon('download', 17)} Descargar</button>`}</div></div>`,
+    `${dialogHeader(c.demo ? 'Reporte de ejemplo' : 'Detalle del reporte')}<div class="dialog-body report-detail"><div class="report-detail-title">${roadSign(cat.icon)}<div><span class="muted">${esc(cat.name)}</span><h3>${esc(c.detail)}</h3></div></div>${many ? `<p class="case-count">${icon('user', 16)} <strong>${list.length} vecinos</strong> reportaron este problema</p>` : ''}${list.filter((r) => (r.photos || []).length || mine.isMine(r.id)).map((r) => reportBlock(c, r, many)).join('')}<div class="local-notice">${icon('info', 20)} ${c.demo ? 'Datos ficticios para mostrar cómo funciona AFM. No es un reclamo real.' : 'Reporte ciudadano publicado en AFM. No se ha enviado a la municipalidad.'}</div><div class="detail-actions"><button class="button orange" id="see-location">${icon('map', 17)} Ver ubicación</button></div></div>`,
     'light-dialog',
   );
   $$('[data-flag]', dialog).forEach((b) => (b.onclick = () => openFlagForm(c, b.dataset.flag)));
@@ -307,24 +317,6 @@ function openReport(c) {
     }
     mainMap.setView([c.lat, c.lng], 17);
     $('#map-section').scrollIntoView({ behavior: 'smooth' });
-  };
-  if (c.demo) return;
-  $('#export-report').onclick = () => {
-    const data = {
-      id: c.id,
-      category: categoryById(c.category).name,
-      detail: c.detail,
-      address: formatAddress(c),
-      lat: c.lat,
-      lng: c.lng,
-      reports: list.map((r) => ({ fecha: r.createdAt, descripcion: r.description, fotos: (r.photos || []).length })),
-    };
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-    a.download = `${c.id}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    toast('Reporte descargado sin datos de contacto.');
   };
 }
 
@@ -476,11 +468,11 @@ function openMenu() {
 }
 
 // ---------- Asistente para crear un reporte ----------
-function startWizard(category = '') {
+function startWizard(category = '', location = null) {
   draft = {
     category,
     detail: '',
-    location: null,
+    location,
     addressParts: { street: '', number: '', neighborhood: '' },
     addressEdited: false,
     description: '',
@@ -494,6 +486,22 @@ function startWizard(category = '') {
   };
   step = 0;
   renderWizard();
+  if (location) prefillAddress(draft);
+}
+
+/** Con el punto ya marcado desde el mapa, busca su dirección para el paso 3 (sin pisar lo que se escriba). */
+async function prefillAddress(d) {
+  try {
+    const parts = partsFromNominatim(await reverseGeocode(d.location.lat, d.location.lng));
+    if (draft !== d || d.addressEdited || d.addressParts.street) return;
+    d.addressParts = parts;
+    if (step === 2 && wizardMap) {
+      $$('[data-address-part]', dialog).forEach((input) => (input.value = parts[input.dataset.addressPart] || ''));
+      $('#selected-point').textContent = formatAddress(parts);
+    }
+  } catch {
+    /* sin dirección: el vecino puede escribirla en el paso 3 */
+  }
 }
 
 function discardDraft() {

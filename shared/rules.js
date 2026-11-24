@@ -2,7 +2,7 @@
 import { CATEGORIES } from './categories.js';
 import { isInsideConchali, OUTSIDE_MESSAGE } from './geo.js';
 
-export const TERMS_VERSION = '2026-09-13';
+export const TERMS_VERSION = '2026-11-24';
 export const MAX_DESCRIPTION = 500;
 export const MAX_PHOTOS = 2;
 /** Foto original que elige el vecino (se reduce en el teléfono antes de subirla). */

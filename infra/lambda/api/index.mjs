@@ -195,6 +195,11 @@ function groupByTicket(reports) {
 }
 
 /** Caso público: se identifica por su primer reporte (el número de ticket no se publica). */
+/**
+ * Caso público: solo lo que ve un vecino en el mapa — ubicación, categoría, tipo de problema,
+ * cantidad de vecinos y fotos. Sin dirección, descripción ni fechas (eso solo lo ve moderación).
+ * El número de ticket tampoco se publica: el caso se identifica por su primer reporte.
+ */
 async function publicCase({ primary, reports }) {
   return {
     id: primary.id,
@@ -202,12 +207,8 @@ async function publicCase({ primary, reports }) {
     detail: primary.detail,
     lat: primary.lat,
     lng: primary.lng,
-    address: primary.address,
-    addressParts: primary.addressParts,
-    createdAt: primary.createdAt,
-    updatedAt: reports.at(-1).createdAt,
     reportCount: reports.length,
-    reports: await Promise.all(reports.map(publicReport)),
+    reports: await Promise.all(reports.map(async (r) => ({ id: r.id, photos: await photoUrls(r.photoKeys) }))),
   };
 }
 
@@ -271,8 +272,9 @@ function requireModerator(event) {
 // ---------- Rutas públicas ----------
 async function listCases() {
   const groups = groupByTicket(await queryType('REPORT'));
-  const cases = await Promise.all(groups.map(publicCase));
-  return { cases: cases.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
+  // Orden: casos con actividad más reciente primero (la fecha se usa para ordenar, pero no se publica).
+  groups.sort((a, b) => b.reports.at(-1).createdAt.localeCompare(a.reports.at(-1).createdAt));
+  return { cases: await Promise.all(groups.map(publicCase)) };
 }
 
 async function createUpload(event) {

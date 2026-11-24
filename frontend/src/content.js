@@ -77,7 +77,7 @@ export const LEGAL = {
     `Para realizar un reporte, AFM solicita tu nombre, apellido, WhatsApp y tu relación con Conchalí y con el sector reportado. Estos datos permiten identificar el origen de los reportes y conocer mejor las necesidades de los distintos barrios de la comuna.`,
     `Tu nombre, apellido y WhatsApp no serán publicados ni aparecerán en el mapa o en el detalle público de tus reportes.`,
     `Información de los reportes`,
-    `Los reportes realizados en AFM podrán ser visibles públicamente e incluirán la categoría y tipo de problema, ubicación, fecha, descripción y fotografías que hayas incorporado.`,
+    `En el mapa público de AFM solo se muestran la ubicación del problema, su categoría y tipo, las fotografías y cuántos vecinos lo reportaron. La dirección escrita, la descripción y la fecha solo las ve el equipo de moderación de AFM.`,
     `Ubicación y mapa`,
     `AFM utiliza servicios de mapas y geolocalización para permitirte ubicar el lugar del reporte. El acceso a la ubicación de tu dispositivo solo se solicitará cuando utilices esa función y requerirá tu autorización.`,
     `Uso de la información`,
@@ -89,7 +89,7 @@ export const LEGAL = {
     `Tampoco deben incorporarse datos personales de terceros que no sean necesarios para identificar el problema, especialmente rostros, nombres, teléfonos, domicilios o patentes de vehículos.`,
     `AFM podrá moderar y eliminar los reportes, textos o fotografías que incumplan estas normas de uso.`,
     `Aceptación`,
-    `Al realizar un reporte, declaras conocer y aceptar estas condiciones y autorizas la publicación de la información, descripción, ubicación y fotografías asociadas al reporte, con exclusión de tus datos personales de contacto.`,
+    `Al realizar un reporte, declaras conocer y aceptar estas condiciones y autorizas la publicación de la ubicación, la categoría y tipo de problema y las fotografías asociadas al reporte. Tus datos de contacto, la dirección escrita y la descripción no se publican.`,
   ],
 };
 
