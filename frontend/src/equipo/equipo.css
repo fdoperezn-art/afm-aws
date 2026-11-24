@@ -26,7 +26,7 @@
   gap: 12px;
 }
 .team-form .field-row > div,
-.team-form fieldset > div {
+.team-form fieldset > div:not(.address-search):not(.team-map-wrap) {
   display: grid;
   gap: 6px;
   min-width: 0;
@@ -48,4 +48,23 @@
   .team-form .field-row {
     grid-template-columns: 1fr;
   }
+}
+#address-results {
+  display: grid;
+  gap: 6px;
+}
+#address-results button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  background: #0d0d0c;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+#address-results button:hover,
+#address-results button:focus-visible {
+  border-color: var(--orange);
 }
