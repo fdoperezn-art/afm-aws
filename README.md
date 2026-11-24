@@ -93,6 +93,20 @@ Luego, en GitHub: *Settings → Secrets and variables → Actions → Variables 
 `AWS_DEPLOY_ROLE_ARN` = el valor `DeployRoleArn` que muestra el comando anterior.
 Mientras esa variable no exista, el flujo no hace nada.
 
+## Dominio propio
+
+`afmconchali.cl` está registrado en NIC Chile, con el DNS en **Cloudflare** (plan gratuito) y conectado a
+Amplify Hosting. El certificado HTTPS lo gestiona Amplify y es gratis. `www.afmconchali.cl` redirige a
+`afmconchali.cl`, y la URL de Amplify (`https://main.d1vjizv6p8czdz.amplifyapp.com`) sigue funcionando.
+
+- La asociación del dominio en Amplify se creó por API (`aws amplify create-domain-association`), no con CDK,
+  porque CloudFormation esperaría horas la verificación DNS. Consúltala con
+  `aws amplify get-domain-association --app-id d1vjizv6p8czdz --domain-name afmconchali.cl --region us-east-2`.
+- Registros en Cloudflare, todos con **proxy desactivado (nube gris)**: el CNAME `_74f85a…` de validación del
+  certificado, y `@` y `www` como CNAME a `d1k5zuhefzfls1.cloudfront.net`. Si se activa el proxy, falla la
+  renovación del certificado.
+- CORS, CSP y el correo de invitación usan el dominio (`CUSTOM_DOMAIN` en `infra/lib/afm-stack.ts`).
+
 ## Crear un moderador
 
 Cognito le envía un correo con una contraseña temporal. En el primer ingreso a `/admin/`

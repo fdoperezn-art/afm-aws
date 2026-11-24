@@ -14,6 +14,8 @@ import { Construct } from 'constructs';
 
 const ADMIN_GROUP = 'moderadores';
 const LOCAL_DEV_ORIGIN = 'http://localhost:5173';
+/** Dominio propio (DNS en Cloudflare; asociado a Amplify por API, ver README). */
+const CUSTOM_DOMAIN = 'afmconchali.cl';
 
 /**
  * AFM · Aquí falta la muni — infraestructura completa:
@@ -29,6 +31,9 @@ export class AfmStack extends Stack {
       description: 'AFM · Aquí falta la muni — mapa ciudadano de Conchalí',
       platform: 'WEB',
       customRules: [
+        // Una sola dirección oficial: www → dominio sin www.
+        { source: `https://www.${CUSTOM_DOMAIN}`, target: `https://${CUSTOM_DOMAIN}`, status: '301' },
+        { source: `https://www.${CUSTOM_DOMAIN}/<*>`, target: `https://${CUSTOM_DOMAIN}/<*>`, status: '301' },
         { source: '/admin', target: '/admin/', status: '301' },
         { source: '/admin/<*>', target: '/admin/index.html', status: '404-200' },
         { source: '/<*>', target: '/index.html', status: '404-200' },
@@ -40,8 +45,9 @@ export class AfmStack extends Stack {
       stage: 'PRODUCTION',
       enableAutoBuild: false,
     });
-    const siteOrigin = `https://main.${app.attrDefaultDomain}`;
-    const allowedOrigins = [siteOrigin, LOCAL_DEV_ORIGIN];
+    const amplifyOrigin = `https://main.${app.attrDefaultDomain}`; // sigue funcionando
+    const siteOrigin = `https://${CUSTOM_DOMAIN}`;
+    const allowedOrigins = [siteOrigin, amplifyOrigin, LOCAL_DEV_ORIGIN];
 
     // ---------- Datos: DynamoDB (diseño de tabla única) ----------
     // Reporte: PK=REPORT#<id> SK=META            GSI1PK=REPORT GSI1SK=<fecha>#<id>
@@ -251,6 +257,7 @@ export class AfmStack extends Stack {
     // ---------- Salidas ----------
     new CfnOutput(this, 'SiteUrl', { value: siteOrigin });
     new CfnOutput(this, 'AdminUrl', { value: `${siteOrigin}/admin/` });
+    new CfnOutput(this, 'AmplifyUrl', { value: amplifyOrigin });
     new CfnOutput(this, 'ApiUrl', { value: api.url });
     new CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
     new CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
