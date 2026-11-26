@@ -4831,3 +4831,7 @@ dialog::backdrop {
     font-size: 20px;
   }
 }
+.footer > p.footer-tagline .footer-tagline-white {
+  color: #f3eee8; /* mismo blanco cálido del texto del sitio */
+  font-size: inherit;
+}
