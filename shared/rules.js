@@ -29,7 +29,13 @@ export function distanceMeters(a, b) {
   return 2 * 6371000 * Math.asin(Math.sqrt(h));
 }
 
-export const RELATIONS = ['Vivo en Conchalí', 'Trabajo en Conchalí', 'Estudio en Conchalí', 'Visito Conchalí'];
+export const RELATIONS = [
+  'Vivo en Conchalí',
+  'Trabajo en Conchalí',
+  'Estudio en Conchalí',
+  'Visito Conchalí',
+  'Transito por Conchalí',
+];
 export const SECTORS = ['Vivo en este sector', 'Trabajo o estudio aquí', 'Paso por este sector'];
 export const FLAG_REASONS = [
   'Contenido ofensivo o discriminatorio',

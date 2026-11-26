@@ -48,7 +48,7 @@ export const LEGAL = {
     `1. ¿Esto es un canal municipal?`,
     `No. AFM es una herramienta ciudadana independiente y no reemplaza los canales oficiales de atención, solicitudes, reclamos o denuncias.`,
     `2. ¿Quién puede reportar?`,
-    `Quienes viven, trabajan, estudian o visitan Conchalí y quieren hacer visible un problema de la comuna.`,
+    `Quienes viven, trabajan, estudian, visitan o transitan por Conchalí y quieren hacer visible un problema de la comuna.`,
     `3. ¿Necesito una fotografía?`,
     `Sí. Una fotografía ayuda a mostrar mejor lo que está pasando. Puedes añadir hasta dos imágenes JPG, PNG, WebP o HEIC, de hasta 15 MB cada una. Las reducimos automáticamente para que se envíen rápido.`,
     `4. ¿Puedo consultar mi reporte después?`,
