@@ -4819,3 +4819,15 @@ dialog::backdrop {
   outline: 2px solid var(--orange);
   outline-offset: 2px;
 }
+
+/* Lema del pie de página: más grande y en naranja */
+.footer > p.footer-tagline {
+  color: var(--orange);
+  font: 700 22px/1.1 var(--condensed);
+  letter-spacing: 0.3px;
+}
+@media (max-width: 640px) {
+  .footer > p.footer-tagline {
+    font-size: 20px;
+  }
+}
